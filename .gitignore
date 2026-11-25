@@ -32,6 +32,19 @@ deploy/.env
 # 这样部署目录可以单独拷到服务器构建（不需要 node、不需要项目其余部分）。
 deploy/__pycache__/
 
+# ---------- TLS 证书 ----------
+# 私钥不入库（上方已忽略 *.pem / *.key）。推荐在服务器上直接生成，10 秒且不传私钥：
+#   ./deploy.sh cert <服务器IP或域名>
+# 用正式证书就手动传过去：
+#   scp fullchain.pem root@host:/path/deploy/certs/server.crt
+#   scp privkey.pem   root@host:/path/deploy/certs/server.key
+# 确实想把自签证书一并入库时，取消下面两行的注释：
+# !deploy/certs/server.crt
+# !deploy/certs/server.key
+deploy/certs/*.crt
+deploy/certs/*.key
+deploy/certs/*.pem
+
 # ---------- 编辑器与系统 ----------
 .vscode/
 .idea/

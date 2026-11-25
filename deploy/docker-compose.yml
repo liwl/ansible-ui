@@ -1,7 +1,7 @@
 services:
   ansible-ui:
     build:
-      # 构建上下文就是 deploy 目录，里面只有 context/（组装好的源码+静态资源，几 MB），
+      # 构建上下文就是 deploy 目录，里面只有 app/ + dist/ + requirements.txt（几 MB），
       # 不会把 web/node_modules 之类的开发文件传给 Docker daemon。
       context: .
       dockerfile: Dockerfile
@@ -20,13 +20,17 @@ services:
     environment:
       PORT: ${PORT:-5000}
       ANSIBLE_HOST_KEY_CHECKING: ${ANSIBLE_HOST_KEY_CHECKING:-False}
+      # 是否启用 HTTPS 完全由 .env 里的这两个变量决定：
+      #   非空 → Flask 用证书启动 TLS（deploy.sh cert 会自动填好）
+      #   留空 → 明文 HTTP
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+      SSL_KEY_FILE: ${SSL_KEY_FILE:-}
 
     ports:
-      # HOST_BIND 控制监听地址：
-      #   HTTP 模式   0.0.0.0（默认，直接对外）
-      #   HTTPS 模式  由 deploy.sh 置为 127.0.0.1，只允许 Caddy 走内网访问，
-      #               避免绕过 HTTPS 直接打 5000 端口
-      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-5000}:${PORT:-5000}"
+      # 容器内端口恒为 PORT，HOST_PORT 控制对外端口
+      # HTTP：HOST_PORT=5000 → http://IP:5000
+      # HTTPS：HOST_PORT=443  → https://IP（deploy.sh cert 会自动改好）
+      - "${HOST_PORT:-5000}:${PORT:-5000}"
 
     volumes:
       # 数据库、日志、上传文件持久化，容器重建不丢数据
@@ -34,11 +38,25 @@ services:
       - app-logs:/app/logs
       - app-data:/app/data
       - app-uploads:/tmp/ansible_uploads
+      # 证书目录：只读挂载，换证书重启容器即可生效，不用重新构建镜像。
+      # 末尾的 z 是 SELinux relabel 标志（CentOS/RHEL 开启 enforcing 时
+      # 不加它容器读不到宿主文件，非 SELinux 系统会自动忽略）。
+      # 目录不存在时 Docker 会建成空目录，此时若 .env 填了证书路径会启动失败，
+      # deploy.sh 会提前拦截并提示先跑 ./deploy.sh cert。
+      - ./certs:/app/certs:ro,z
       # 如需使用 SSH 密钥认证，取消下面这行注释，并把密钥放到 deploy/ssh/ 下
       # - ./ssh:/root/.ssh:ro
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:${PORT:-5000}/\" >/dev/null 2>&1 || exit 1"]
+      # 自动识别模式：SSL_CERT_FILE 非空就探 https（-k 跳过自签校验），否则探 http
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$SSL_CERT_FILE" ]; then
+            curl -fkS "https://127.0.0.1:$${PORT:-5000}/" -o /dev/null || exit 1;
+          else
+            curl -fsS "http://127.0.0.1:$${PORT:-5000}/" -o /dev/null || exit 1;
+          fi
       interval: 30s
       timeout: 5s
       retries: 3

@@ -4,6 +4,7 @@ from database import Database
 from ansible_manager import AnsibleManager
 import json
 import os
+import sys
 from functools import wraps
 import secrets
 from flask_sock import Sock
@@ -1510,8 +1511,33 @@ if __name__ == '__main__':
         ensure_crypto_key()
         start_patrol_scheduler()
 
+    # HTTPS：设置 SSL_CERT_FILE / SSL_KEY_FILE 即启用，不设置则维持明文 HTTP。
+    # 证书由外部准备（自签脚本或正式证书），这里只负责加载。
+    ssl_context = None
+    ssl_cert = os.getenv('SSL_CERT_FILE')
+    ssl_key = os.getenv('SSL_KEY_FILE')
+    if ssl_cert and ssl_key:
+        missing = [p for p in (ssl_cert, ssl_key) if not os.path.exists(p)]
+        if missing:
+            # 配了证书却读不到：宁可启动失败，也不能静默退回明文端口
+            msg = f"证书文件不存在，拒绝以明文启动：{', '.join(missing)}"
+            app.logger.error(msg)
+            print(f"[FATAL] {msg}", file=sys.stderr, flush=True)
+            raise SystemExit(1)
+        ssl_context = (ssl_cert, ssl_key)
+        app.logger.info('已启用 HTTPS，证书：%s', ssl_cert)
+        print(f"[INFO] 已启用 HTTPS，证书：{ssl_cert}", flush=True)
+    elif ssl_cert or ssl_key:
+        msg = "SSL_CERT_FILE 与 SSL_KEY_FILE 必须同时设置"
+        app.logger.error(msg)
+        print(f"[FATAL] {msg}", file=sys.stderr, flush=True)
+        raise SystemExit(1)
+    else:
+        print("[INFO] 未配置证书，以 HTTP 启动", flush=True)
+
     app.run(
         host=os.getenv('HOST', '0.0.0.0'),
         port=int(os.getenv('PORT', '5000')),
         debug=os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes'),
+        ssl_context=ssl_context,
     )

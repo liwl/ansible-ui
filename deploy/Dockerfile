@@ -48,11 +48,13 @@ COPY app/ ./
 COPY dist/ ./public/
 
 # 运行时目录由 compose 的 volume 接管，这里先建好空目录
-RUN mkdir -p db logs data /tmp/ansible_uploads
+# certs/ 是证书挂载点：宿主机 deploy/certs 只读挂到这里，换证书不必重建镜像
+RUN mkdir -p db logs data certs /tmp/ansible_uploads
 
 EXPOSE 5000
 
+# HTTPS 模式下 SSL_CERT_FILE 非空，健康检查自动切到 https（-k 容忍自签证书）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'curl -fsS "http://127.0.0.1:${PORT:-5000}/" >/dev/null 2>&1 || exit 1'
+    CMD sh -c 'if [ -n "$SSL_CERT_FILE" ]; then curl -fkS "https://127.0.0.1:${PORT:-5000}/" -o /dev/null || exit 1; else curl -fsS "http://127.0.0.1:${PORT:-5000}/" -o /dev/null || exit 1; fi'
 
 CMD ["python", "app.py"]
