@@ -9,6 +9,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-core': ['react', 'react-dom', 'react-router-dom'],
+          'xterm': ['xterm', 'xterm-addon-fit', 'xterm-addon-web-links'],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/ws': {

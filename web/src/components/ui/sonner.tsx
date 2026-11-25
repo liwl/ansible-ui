@@ -1,14 +1,13 @@
 import { Toaster as Sonner, ToasterProps } from "sonner"
+import { useTheme } from "next-themes"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  // 使用固定的明亮或者暗色主题，按系统决定
-  const theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches 
-    ? 'dark' 
-    : 'light';
+  // 跟随应用内选择的主题（next-themes 已把 system 解析成实际值）
+  const { resolvedTheme } = useTheme()
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={(resolvedTheme ?? 'light') as ToasterProps["theme"]}
       className="toaster group"
       style={
         {

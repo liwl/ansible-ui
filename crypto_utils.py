@@ -40,7 +40,7 @@ class CryptoUtils:
             return None
             
         nonce = os.urandom(12)
-        cipher = AESGCM(self.key)
+        cipher = AESGCM(self._active_key())
         encrypted = cipher.encrypt(nonce, plain_text.encode('utf-8'), None)
         result = base64.b64encode(nonce + encrypted).decode('utf-8')
         return f"ENC:{result}"
@@ -58,11 +58,20 @@ class CryptoUtils:
             data = base64.b64decode(encrypted_text)
             nonce = data[:12]
             ciphertext = data[12:]
-            cipher = AESGCM(self.key)
+            cipher = AESGCM(self._active_key())
             return cipher.decrypt(nonce, ciphertext, None).decode('utf-8')
         except Exception as e:
             print(f"解密失败: {str(e)}")
             return encrypted_text
+
+    def _active_key(self):
+        """优先使用运行期通过 set_crypto_keys 注入的密钥。
+
+        单例可能在注入之前就已创建（db 在 import 阶段就 new 了 CryptoUtils），
+        此时 self.key 还是随机占位密钥；如果只读 self.key，
+        主机密码就会用每个进程各自随机的密钥加密，重启后永久无法解密。
+        """
+        return CRYPTO_KEY if CRYPTO_KEY else self.key
     
     def is_encrypted(self, text):
         """检查文本是否已加密"""
@@ -87,6 +96,12 @@ def set_crypto_keys(key, salt):
         
     CRYPTO_KEY = key
     CRYPTO_SALT = salt
+
+    # 同步已创建的单例，否则它仍然拿着初始化时的随机占位密钥
+    instance = CryptoUtils._instance
+    if instance is not None:
+        instance.key = key
+        instance.salt = salt
 
 def derive_key_from_credentials(username, password):
     """从用户名和密码派生加密密钥

@@ -230,7 +230,7 @@ function TerminalPage() {
       <header className="p-2 border-b flex items-center justify-between bg-card text-card-foreground">
         <h1 className="text-lg font-semibold">终端 - 主机 ID: {hostId}</h1>
         <div className="flex items-center gap-2">
-          <span className={`flex items-center gap-1 text-sm ${isConnected ? 'text-green-500' : 'text-red-500'}`}>
+          <span className={`flex items-center gap-1 text-sm ${isConnected ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
             {isConnecting ? (
               <ReloadIcon className="h-4 w-4 animate-spin" />
             ) : isConnected ? (

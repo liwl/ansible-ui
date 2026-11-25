@@ -118,13 +118,13 @@ function FileUpload({ targetHostIds, onClose }: FileUploadProps) {
         className={`border-2 border-dashed rounded-md p-6 text-center cursor-pointer ${isDragActive ? 'border-primary bg-primary/10' : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'}`}
       >
         <input {...getInputProps()} />
-        <UploadCloudIcon className="mx-auto h-12 w-12 text-gray-400" />
+        <UploadCloudIcon className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" />
         {isDragActive ? (
           <p className="mt-2 text-sm text-primary">将文件拖到此处...</p>
         ) : (
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">将文件拖放到此处，或点击选择文件</p>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 dark:text-gray-500">将文件拖放到此处，或点击选择文件</p>
         )}
-        <p className="text-xs text-gray-500 dark:text-gray-500">仅支持单个文件上传</p>
+        <p className="text-xs text-muted-foreground">仅支持单个文件上传</p>
       </div>
 
       {file && (

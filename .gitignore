@@ -1,4 +1,37 @@
+# ---------- 前端构建产物与依赖 ----------
 web/dist/
 web/node_modules/
+public/assets/
+public/index.html
+
+# ---------- Python ----------
 __pycache__/
+*.pyc
+*.pyo
 .ruff_cache/
+*.egg-info/
+
+# ---------- 运行期数据（绝不入库）----------
+db/
+logs/
+data/
+*.db
+*.db-journal
+*.secret_key
+
+# ---------- 环境变量与凭证 ----------
+# deploy/.env 里含 ADMIN_PASSWORD 和 SECRET_KEY，泄露即等于交出管理员权限
+deploy/.env
+.env
+.env.local
+*.pem
+*.key
+
+# ---------- 编辑器与系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# WorkBuddy 工作目录（记忆/临时文件），不入库
+.workbuddy/

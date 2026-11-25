@@ -1,9 +1,10 @@
-services:
-  app:
-    build: .
-    ports:
-      - "5000:5000"
-    environment:
-      - ANSIBLE_HOST_KEY_CHECKING=False
-      - ADMIN_USERNAME=admin123
-      - ADMIN_PASSWORD=admin123
+# 部署配置已移至 deploy/ 目录，请使用该目录下的 compose 文件：
+#
+#   cd deploy
+#   cp .env.example .env
+#   # 修改 .env 中的 ADMIN_PASSWORD 和 SECRET_KEY
+#   ./deploy.sh up
+#
+# 环境变量说明见 deploy/.env.example 中的注释。
+#
+# 保留此文件仅为兼容旧引用，不再维护实际编排内容。

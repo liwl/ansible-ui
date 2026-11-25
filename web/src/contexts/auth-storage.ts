@@ -1,5 +1,11 @@
 export const authStorage = {
-  setAuth: (value: boolean, token: string | null = null, expiresInHours: number = 5) => {
+  setAuth: (
+    value: boolean,
+    token: string | null = null,
+    expiresInHours: number = 5,
+    username: string | null = null,
+    role: string | null = null,
+  ) => {
     if (typeof localStorage !== 'undefined') {
       const expiresAt = new Date()
       expiresAt.setHours(expiresAt.getHours() + expiresInHours)
@@ -11,6 +17,17 @@ export const authStorage = {
         localStorage.setItem('token', token)
       } else if (value === false) {
         localStorage.removeItem('token')
+      }
+
+      if (value && username) {
+        localStorage.setItem('authUsername', username)
+      }
+      if (value && role) {
+        localStorage.setItem('authRole', role)
+      }
+      if (value === false) {
+        localStorage.removeItem('authUsername')
+        localStorage.removeItem('authRole')
       }
     }
   },
@@ -43,11 +60,29 @@ export const authStorage = {
     return null
   },
 
+  getRole: (): string | null => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('authRole')
+    }
+
+    return null
+  },
+
+  getUsername: (): string | null => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('authUsername')
+    }
+
+    return null
+  },
+
   clearAuth: () => {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem('isAuthenticated')
       localStorage.removeItem('authExpiresAt')
       localStorage.removeItem('token')
+      localStorage.removeItem('authUsername')
+      localStorage.removeItem('authRole')
     }
   },
 }
