@@ -1,0 +1,30 @@
+# ============================================================
+# Caddy 配置：内网自签证书版本
+#
+# 适用场景：没有公网域名，只有内网 IP（如 https://192.168.1.10）
+# 用法：把 docker-compose.https.yml 里的挂载改成本文件
+#   - ./Caddyfile.internal:/etc/caddy/Caddyfile:ro
+#
+# 浏览器首次访问会提示"证书不受信任"，因为签发者是 Caddy 自建的
+# 本地 CA（不是公共 CA）。可选处理：
+#   1. 直接点"继续访问"（内部工具够用）
+#   2. 导出 Caddy 根证书装到客户端（真正消除警告，见文末）
+# ============================================================
+
+https://{$SITE_ADDRESS} {
+	tls internal
+
+	encode zstd gzip
+
+	reverse_proxy ansible-ui:{$UPSTREAM_PORT:5000}
+
+	header -Server
+}
+
+# ---------- 让浏览器不再报警（可选）----------
+# Caddy 的根证书在容器的 /data/caddy/pki/authorities/local/root.crt
+# 先拷贝出来：
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml \
+#     cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+# 然后在 Windows 上双击安装：
+#   受信任的根证书颁发机构 → 本地计算机 → 导入

@@ -35,6 +35,7 @@ RUN set -eux; \
         openssh-client \
         sshpass \
         curl \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

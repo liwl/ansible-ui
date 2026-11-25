@@ -1,0 +1,29 @@
+# ============================================================
+# Caddy 反向代理配置
+#
+# SITE_ADDRESS 在 deploy/.env 里设置：
+#   公网域名  example.com          → 自动申请并续期 Let's Encrypt 证书
+#   仅 HTTP   http://example.com   → 不启用 HTTPS（不推荐）
+#   纯 IP     https://1.2.3.4      → 需要改用 Caddyfile.internal（自签证书）
+#
+# 前置条件（公网域名场景）：
+#   1. 域名 A 记录已指向本机公网 IP
+#   2. 防火墙/安全组放行 80 和 443（80 用于 ACME 校验和跳转）
+# ============================================================
+
+{$SITE_ADDRESS} {
+	# 压缩，静态资源收益明显
+	encode zstd gzip
+
+	# 反代到 Flask。
+	# Caddy 会自动透传 WebSocket 升级（终端功能依赖），无需额外配置；
+	# 同时会追加 X-Forwarded-For，后端 get_client_ip() 能拿到真实来源 IP。
+	reverse_proxy ansible-ui:{$UPSTREAM_PORT:5000}
+
+	# 请求体默认不限大小，上传大文件无需额外配置。
+	# 如需限制可解开下面这行（要求 Caddy 2.7+）：
+	# request_body { max_size 500MB }
+
+	# 隐藏 Caddy 版本号
+	header -Server
+}

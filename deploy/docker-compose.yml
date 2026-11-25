@@ -22,7 +22,11 @@ services:
       ANSIBLE_HOST_KEY_CHECKING: ${ANSIBLE_HOST_KEY_CHECKING:-False}
 
     ports:
-      - "${HOST_PORT:-5000}:${PORT:-5000}"
+      # HOST_BIND 控制监听地址：
+      #   HTTP 模式   0.0.0.0（默认，直接对外）
+      #   HTTPS 模式  由 deploy.sh 置为 127.0.0.1，只允许 Caddy 走内网访问，
+      #               避免绕过 HTTPS 直接打 5000 端口
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-5000}:${PORT:-5000}"
 
     volumes:
       # 数据库、日志、上传文件持久化，容器重建不丢数据

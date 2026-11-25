@@ -6,9 +6,9 @@
 #   app/               后端源码
 #   dist/              前端产物
 #   requirements.txt   Python 依赖
-#   Dockerfile / docker-compose.yml / .env
+#   Dockerfile / docker-compose*.yml / .env
 #
-# 因此可以单独拷到任意装了 Docker 的机器上直接：
+# 可以单独拷到任意装了 Docker 的机器上直接：
 #   cp .env.example .env && ./deploy.sh up
 # 不需要项目其余部分，也不需要 Node.js。
 # ============================================================
@@ -16,6 +16,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
+
+HTTPS_FILES="-f docker-compose.yml -f docker-compose.https.yml"
 
 # ---------- 基础检查 ----------
 require_docker() {
@@ -52,6 +54,15 @@ check_inputs() {
   fi
 }
 
+require_site_address() {
+  if ! grep -qE '^SITE_ADDRESS=.+' .env 2>/dev/null; then
+    echo "!! 请先在 deploy/.env 中设置 SITE_ADDRESS：" >&2
+    echo "   SITE_ADDRESS=ansible.example.com   # 公网域名，Caddy 自动申请证书" >&2
+    echo "   SITE_ADDRESS=192.168.1.10          # 内网 IP，需改用 Caddyfile.internal（自签）" >&2
+    exit 1
+  fi
+}
+
 # 开发时提醒：根目录源码比 deploy/app 新，说明忘了 sync
 warn_stale_backend() {
   if [ -f "$PROJECT_ROOT/app.py" ] && [ -f app/app.py ]; then
@@ -61,6 +72,13 @@ warn_stale_backend() {
       echo "    ⚠ 项目根的 $(basename "$newer") 比 deploy/app 新，建议先执行： ./deploy.sh sync"
     fi
   fi
+}
+
+# down/logs/status 需要覆盖到 caddy，但 .env 没配 SITE_ADDRESS 时
+# compose 会因为 ${SITE_ADDRESS:?...} 直接报错，这里给个无用兜底值
+compose_all() {
+  SITE_ADDRESS="${SITE_ADDRESS:-unused.local}" \
+    docker compose -f docker-compose.yml -f docker-compose.https.yml "$@"
 }
 
 # ---------- 子命令 ----------
@@ -110,17 +128,19 @@ frontend() {
 }
 
 usage() {
-  echo "用法: $0 {up|build|sync|frontend|down|restart|logs|status|config}"
+  echo "用法: $0 {up|https|build|sync|frontend|down|https-down|restart|logs|status|config}"
   echo ""
-  echo "  up        构建镜像并后台启动（默认）"
-  echo "  build     仅构建镜像"
-  echo "  sync      从项目根同步后端源码到 deploy/app（开发机用）"
-  echo "  frontend  本地构建前端并同步到 deploy/dist（需要 Node.js）"
-  echo "  down      停止并移除容器（保留数据卷）"
-  echo "  restart   重启容器（不重新构建）"
-  echo "  logs      实时查看日志"
-  echo "  status    查看容器状态"
-  echo "  config    检查 compose 配置"
+  echo "  up          构建镜像并以 HTTP 启动（默认，直接暴露 5000）"
+  echo "  https       构建镜像并以 HTTPS 启动（Caddy 反代 + 自动证书）"
+  echo "  build       仅构建镜像，不启动"
+  echo "  sync        从项目根同步后端源码到 deploy/app（开发机用）"
+  echo "  frontend    本地构建前端并同步到 deploy/dist（需要 Node.js）"
+  echo "  down        停止并移除容器（保留数据卷与证书）"
+  echo "  https-down  同上，显式指定 HTTPS 组合"
+  echo "  restart     重启容器（不重新构建）"
+  echo "  logs        实时查看日志"
+  echo "  status      查看容器状态"
+  echo "  config      检查 compose 配置"
 }
 
 case "${1:-up}" in
@@ -131,6 +151,19 @@ case "${1:-up}" in
     warn_stale_backend
     docker compose up -d --build
     echo "启动完成，访问 http://localhost:$(grep '^HOST_PORT=' .env | cut -d= -f2 | tr -d '\r')"
+    ;;
+  https)
+    require_docker
+    ensure_env
+    check_inputs
+    require_site_address
+    warn_stale_backend
+    # HOST_BIND=127.0.0.1：后端端口只绑本机，外部只能经 Caddy 的 443 访问，
+    # 避免有人绕过 HTTPS 直接打 5000 明文端口
+    HOST_BIND=127.0.0.1 docker compose $HTTPS_FILES up -d --build
+    site="$(grep '^SITE_ADDRESS=' .env | cut -d= -f2- | tr -d '\r' | sed 's|^https\?://||')"
+    echo "启动完成，访问 https://${site}"
+    echo "首次签发证书需要几十秒，可用 ./deploy.sh logs 观察进度"
     ;;
   build)
     require_docker
@@ -147,23 +180,27 @@ case "${1:-up}" in
     ;;
   down)
     require_docker
-    docker compose down
+    compose_all down
+    ;;
+  https-down)
+    require_docker
+    compose_all down
     ;;
   restart)
     require_docker
-    docker compose restart
+    compose_all restart
     ;;
   logs)
     require_docker
-    docker compose logs -f ansible-ui
+    compose_all logs -f
     ;;
   status)
     require_docker
-    docker compose ps
+    compose_all ps
     ;;
   config)
     require_docker
-    docker compose config
+    compose_all config
     ;;
   -h|--help|help)
     usage
