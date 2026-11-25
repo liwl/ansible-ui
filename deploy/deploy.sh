@@ -189,6 +189,14 @@ extendedKeyUsage = serverAuth
 EOF
 
   mkdir -p certs
+  # 已有证书先备份：避免误把正式证书（Let's Encrypt 等）覆盖成自签
+  if [ -f certs/server.crt ] || [ -f certs/server.key ]; then
+    local ts; ts="$(date +%Y%m%d%H%M%S)"
+    [ -f certs/server.crt ] && cp certs/server.crt "certs/server.crt.${ts}.bak"
+    [ -f certs/server.key ] && cp certs/server.key "certs/server.key.${ts}.bak"
+    echo "==> 检测到已有证书，已备份为 certs/*.${ts}.bak"
+  fi
+
   echo "==> 生成自签证书（RSA 2048 / 10 年）"
   openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -config "$tmpconf" -keyout certs/server.key -out certs/server.crt 2>/dev/null
