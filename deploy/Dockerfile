@@ -1,32 +1,19 @@
-# ---------- 阶段 1：构建前端 ----------
-FROM node:22-alpine AS frontend
-
-WORKDIR /build
-
-# 可覆盖的 npm 源：国内构建时传 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
-# 不传就用官方源，海外环境不受影响。
-ARG NPM_REGISTRY=https://registry.npmjs.org
-
-# 先复制依赖清单，利用 Docker 层缓存
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN npm config set registry "$NPM_REGISTRY" \
-    && npm install -g pnpm@12 \
-    && pnpm config set registry "$NPM_REGISTRY" \
-    && pnpm install --frozen-lockfile
-
-COPY web/ ./
-RUN pnpm run build
-
-# ---------- 阶段 2：运行后端 ----------
-# 用 3.10 而不是 3.11/3.12：ansible-core 2.13（ansible 6.7）官方只支持到 Python 3.10，
-# 3.11+ 上出现过 collections / inspect 相关的兼容问题，用 3.10 最稳。
-# 用 slim 而不是 alpine：ansible-core 2.13 对 musl 支持不佳，Debian 兼容性更好。
+# ============================================================
+# 运行时镜像：只负责打包，不做任何编译
+#
+# 前端产物（dist）和 Python 源码都在「外部」准备好，
+# docker build 只做三件事：装 Python 依赖、拷贝源码、拷贝静态资源。
+#
+# 构建上下文 = deploy 目录（不是项目根），所以不会把
+# web/node_modules 那 210MB 传进 Docker daemon。
+#
+# 标准流程：
+#   ./deploy.sh frontend    # 本地构建前端 → deploy/dist（需要 node）
+#   ./deploy.sh up          # 组装 context → 构建镜像 → 启动
+# ============================================================
 FROM python:3.10-slim
 
-# 可覆盖的 pip 源与 Debian 源：国内构建时传
-#   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-#   --build-arg DEBIAN_MIRROR=mirrors.aliyun.com
-# pip 装 ansible + cryptography 有大包，用官方源在国内基本会超时。
+# 可覆盖的 pip / Debian 源，国内用镜像源否则装 ansible+cryptography 极易超时
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG DEBIAN_MIRROR=deb.debian.org
 
@@ -49,14 +36,14 @@ RUN set -eux; \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY context/requirements.txt ./
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
-# 先复制静态资源目录（保留 robots.txt），再用构建产物覆盖
-COPY public/ ./public/
-COPY --from=frontend /build/dist ./public/
+# 后端源码
+COPY context/app/ ./
 
-COPY *.py ./
+# 前端已构建产物 + 静态文件（robots.txt 等）
+COPY context/public/ ./public/
 
 # 运行时目录由 compose 的 volume 接管，这里先建好空目录
 RUN mkdir -p db logs data /tmp/ansible_uploads

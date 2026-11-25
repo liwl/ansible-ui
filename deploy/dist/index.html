@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ansible-web</title>
+    <!--
+      在首屏渲染前应用主题，避免刷新时闪一下亮色。
+      取值需与 main.tsx 中 ThemeProvider 的 storageKey 保持一致。
+    -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('ansible-ui-theme');
+          var stored = raw ? raw.replace(/^"|"$/g, '') : '';
+          var mode = stored === 'light' || stored === 'dark'
+            ? stored
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          var root = document.documentElement;
+          root.classList.add(mode);
+          root.style.colorScheme = mode;
+        } catch (e) {
+          /* 隐私模式下 localStorage 可能不可用，忽略即可 */
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-zM5ecsrN.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/react-core-CY9j-ZEY.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-DbblzMGC.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

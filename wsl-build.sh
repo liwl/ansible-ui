@@ -4,19 +4,25 @@
 # 用法（在 WSL 终端里执行）：
 #   bash /mnt/e/Workspace/ansible-ui/wsl-build.sh
 #
-# 为什么先 rsync 再构建：
-#   /mnt/e 是 Windows 盘，Docker 从那里读 context 走 9p 协议，
-#   几万个文件的 node_modules 会让构建慢到怀疑人生。
-#   先同步到 WSL 内部 ext4 目录（排除 node_modules/.git 等），快一个数量级。
+# 前提：deploy/dist 里已有前端产物（在 Windows 上执行过）
+#       cd deploy && bash deploy.sh frontend
+#
+# 构建上下文是 deploy 目录（几 MB），不含 node_modules，
+# 所以不需要在 Docker 里跑 node，速度快很多。
 # ============================================================
 set -euo pipefail
 
 SRC="/mnt/e/Workspace/ansible-ui"
 DST="$HOME/work/ansible-ui"
-IMAGE="ansible-ui:dev"
 
 if [[ ! -d "$SRC" ]]; then
   echo "找不到源码目录：$SRC"
+  exit 1
+fi
+
+if [[ ! -d "$SRC/deploy/dist" ]]; then
+  echo "缺少前端产物 deploy/dist。"
+  echo "请先在 Windows 上执行：cd E:\\Workspace\\ansible-ui\\deploy && bash deploy.sh frontend"
   exit 1
 fi
 
@@ -31,32 +37,35 @@ rsync -a --delete \
   --exclude 'logs' \
   --exclude 'data' \
   --exclude '__pycache__' \
+  --exclude 'deploy/context' \
+  --exclude 'deploy/.env' \
   "$SRC"/ "$DST"/
+# deploy/dist 单独同步（上面的 --exclude 'dist' 会把 web/dist 和 deploy/dist 都排除）
+rsync -a --delete "$SRC/deploy/dist/" "$DST/deploy/dist/"
 echo "    已同步到 $DST"
 
-echo "==> [2/3] 预拉基础镜像（失败时能立刻看出是网络问题，而不是构建问题）"
-docker pull node:22-alpine
-docker pull python:3.10-slim
+cd "$DST/deploy"
 
-echo "==> [3/3] 构建镜像（使用国内镜像源，避免 npm/pip 超时）"
-cd "$DST"
-docker build \
-  -f deploy/Dockerfile \
-  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg DEBIAN_MIRROR=mirrors.aliyun.com \
-  -t "$IMAGE" .
+echo "==> [2/3] 组装构建上下文"
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "    已从 .env.example 生成 .env（仅本地测试用）"
+fi
+bash deploy.sh prepare
+
+echo "==> [3/3] 构建镜像"
+docker compose build
 
 echo
 echo "============================================================"
-echo " 构建完成：$IMAGE"
+echo " 构建完成：ansible-ui:latest"
 echo
 echo " 本地试跑（Windows 浏览器打开 http://localhost:5001）："
 echo "   docker run --rm -p 5001:5000 \\"
 echo "     -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD=admin123 \\"
 echo "     -e SECRET_KEY=local-test \\"
-echo "     $IMAGE"
+echo "     ansible-ui:latest"
 echo
 echo " 或者用 compose（更贴近线上）："
-echo "   cd $DST/deploy && cp .env.example .env && ./deploy.sh up"
+echo "   cd $DST/deploy && ./deploy.sh up"
 echo "============================================================"

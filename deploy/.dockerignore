@@ -1,0 +1,10 @@
+# 构建上下文只保留真正需要的：context/ + Dockerfile
+# .env 里有管理员密码，绝不能发给 Docker daemon
+.env
+.env.*
+dist
+docker-compose.yml
+deploy.sh
+*.log
+context/**/__pycache__
+context/**/*.pyc

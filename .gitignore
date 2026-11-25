@@ -27,6 +27,9 @@ deploy/.env
 *.pem
 *.key
 
+# ---------- Docker 构建上下文（由 deploy.sh prepare 自动生成）----------
+deploy/context/
+
 # ---------- 编辑器与系统 ----------
 .vscode/
 .idea/
