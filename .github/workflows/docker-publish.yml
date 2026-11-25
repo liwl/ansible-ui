@@ -30,8 +30,8 @@ jobs:
         run: |
           docker buildx build --push \
             --platform linux/amd64,linux/arm64 \
+            --file deploy/Dockerfile \
             --tag ghcr.io/${{ github.repository }}:${{ env.VERSION }} \
-            --build-arg VERSION=${{ env.VERSION }} \
-            .
+            deploy
         env:
           VERSION: ${{ github.event.inputs.version }}
