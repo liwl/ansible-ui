@@ -1,0 +1,20 @@
+# 统一行尾策略，避免 Windows/Linux 之间互相污染
+# 特别是 shell 脚本：如果被转成 CRLF，Linux 上会报 "$'\r': command not found"
+* text=auto
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 前端构建产物：原样进出，不做任何行尾转换（会被直接打进镜像）
+deploy/dist/**  -text
+web/dist/**     -text
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
