@@ -58,3 +58,6 @@ Thumbs.db
 # 打包产物
 *.tar.gz
 *.zip
+# 离线部署包的中间目录与产物
+deploy/.offline-stage/
+ansible-ui-offline-*

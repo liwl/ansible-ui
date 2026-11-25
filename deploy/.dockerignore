@@ -10,3 +10,6 @@ app/**/*.pyc
 # 证书是运行时只读挂载进容器的，不进镜像；私钥不该留在镜像层里
 certs
 context
+# 离线导出产物（image.tar 几百 MB，绝不能传进构建上下文）
+.offline-stage
+ansible-ui-offline-*.tar.gz

@@ -14,6 +14,11 @@
 #   ./deploy.sh cert 192.168.1.10 && ./deploy.sh up # HTTPS（自签证书）
 # 不需要项目其余部分，也不需要 Node.js。
 #
+# 不能联网的机器：在有网的机器上
+#   ./deploy.sh export                → ansible-ui-offline-YYYYMMDD.tar.gz
+# 拷过去后
+#   tar xzf 包 && cd 包目录 && ./deploy.sh load
+#
 # HTTPS 由 Flask 自己装载证书实现，不引入 Nginx/Caddy，因此启动时
 # 除了 python 基础镜像不额外下载任何镜像。
 # ============================================================
@@ -28,14 +33,19 @@ get_env_var() {
   grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true
 }
 
-set_env_var() {
-  local key="$1" value="$2"
-  touch .env
-  if grep -qE "^${key}=" .env 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${value}|" .env
+# 往任意 env 风格文件里写一个键（值里含 / 也不怕，sed 用 | 作分隔符）
+set_var_in_file() {
+  local file="$1" key="$2" value="$3"
+  touch "$file"
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
   else
-    printf '%s=%s\n' "$key" "$value" >> .env
+    printf '%s=%s\n' "$key" "$value" >> "$file"
   fi
+}
+
+set_env_var() {
+  set_var_in_file .env "$1" "$2"
 }
 
 # 本机第一个非回环 IP，用于打印访问地址 / 生成证书时自动探测
@@ -67,8 +77,8 @@ require_docker() {
 ensure_env() {
   if [ ! -f .env ]; then
     cp .env.example .env
-    echo "已生成 deploy/.env，请先修改 ADMIN_PASSWORD 和 SECRET_KEY 再启动。"
-    exit 0
+    echo "已从 .env.example 生成 .env，请先修改 ADMIN_PASSWORD 和 SECRET_KEY 再重新执行。" >&2
+    exit 1
   fi
 }
 
@@ -294,14 +304,120 @@ frontend() {
   echo "    记得提交： git add deploy/dist && git commit -m 'build: 更新前端产物'"
 }
 
+# ---------- 离线部署 ----------
+# 导出一个自包含离线包：镜像 + compose + .env.example + deploy.sh (+ 证书)
+# 目标机器全程不需要网络，也不需要导出的 app/ dist/（都已打进镜像）
+export_image() {
+  require_docker
+  ensure_env
+  check_inputs
+  check_tls_ready
+  warn_stale_backend
+
+  local name="${1:-}"
+  [ -z "$name" ] && name="ansible-ui-offline-$(date +%Y%m%d).tar.gz"
+  case "$name" in
+    *.tar.gz|*.tgz) ;;
+    *) name="$name.tar.gz" ;;
+  esac
+  local base; base="$(basename "$name")"
+  base="${base%.tar.gz}"; base="${base%.tgz}"
+
+  echo "==> 构建镜像（离线包要用最新代码）"
+  docker compose build
+
+  local stage=".offline-stage"
+  local pkgdir="$stage/$base"
+  rm -rf "$stage"
+  mkdir -p "$pkgdir"
+
+  echo "==> 导出镜像（几百 MB，需要一会儿；确认磁盘留够 2 倍镜像大小的空间）"
+  docker save -o "$pkgdir/image.tar" ansible-ui:latest
+
+  # 离线包里剥掉 build 段：那边没有 Dockerfile/app/dist，留着可能让 compose
+  # 解析时去找构建上下文。剥干净后退回原文件不要紧，load 是用 --no-build 兜底的。
+  sed '/^    build:$/,/^    image:/{/^    image:/!d}' docker-compose.yml > "$pkgdir/docker-compose.yml"
+  if grep -qE '^[[:space:]]+build:' "$pkgdir/docker-compose.yml"; then
+    echo "    ⚠ compose 结构变了，build 段没能自动剥掉，改用原文件（load 会 --no-build）"
+    cp docker-compose.yml "$pkgdir/docker-compose.yml"
+  fi
+
+  cp .env.example "$pkgdir/"
+  cp deploy.sh "$pkgdir/" && chmod +x "$pkgdir/deploy.sh"
+
+  # 把当前环境的端口与 HTTPS 配置带到离线包，但绝不带 .env（含管理员密码）
+  local cert key port
+  cert="$(get_env_var SSL_CERT_FILE)"
+  key="$(get_env_var SSL_KEY_FILE)"
+  port="$(get_env_var HOST_PORT)"
+  [ -n "$cert" ] && set_var_in_file "$pkgdir/.env.example" SSL_CERT_FILE "$cert"
+  [ -n "$key" ]  && set_var_in_file "$pkgdir/.env.example" SSL_KEY_FILE "$key"
+  [ -n "$port" ] && set_var_in_file "$pkgdir/.env.example" HOST_PORT "$port"
+
+  # 已开 HTTPS 就把证书一起带上，否则离线机还得单独生成一遍
+  local with_cert=0
+  if [ -n "$cert" ] && [ -d certs ] && [ -n "$(ls -A certs 2>/dev/null)" ]; then
+    cp -r certs "$pkgdir/"
+    with_cert=1
+  fi
+
+  echo "==> 打包 $name"
+  tar czf "$name" -C "$stage" "$base"
+  rm -rf "$stage"
+
+  local ip; ip="$(primary_ip)"
+  echo ""
+  echo "离线包已生成： $name  ($(du -h "$name" 2>/dev/null | cut -f1))"
+  echo "  包含：image.tar、docker-compose.yml、.env.example、deploy.sh"
+  [ "$with_cert" = 1 ] && echo "        certs/（随包带上，内含私钥，注意传输安全）"
+  echo ""
+  echo "传到离线机器后："
+  echo "  tar xzf $base.tar.gz && cd $base"
+  echo "  cp .env.example .env && vi .env        # 必须改 ADMIN_PASSWORD"
+  [ "$with_cert" = 1 ] && echo "  # 证书已在 certs/，.env 里的路径也已填好，不用再跑 cert"
+  [ "$with_cert" = 0 ] && echo "  ./deploy.sh cert ${ip:-<本机IP>}              # 需要 HTTPS 才执行"
+  echo "  ./deploy.sh load                       # 载入镜像并启动，全程离线"
+}
+
+# 在已解包好的离线包目录里：加载镜像 + 启动（不构建）
+do_load() {
+  if [ ! -f image.tar ]; then
+    echo "!! 当前目录没有 image.tar，这里不像离线包目录。" >&2
+    echo "   进到解包目录再执行，或直接指定包： ./deploy.sh load ansible-ui-offline-xxx.tar.gz" >&2
+    exit 1
+  fi
+
+  # 先确认配置就绪，免得白花几分钟载入镜像才被告知要改密码
+  ensure_env
+  check_tls_ready
+
+  echo "==> 载入镜像（体积较大，需要一会儿）"
+  docker load -i image.tar
+
+  if ! docker image inspect ansible-ui:latest >/dev/null 2>&1; then
+    echo "!! 加载后仍找不到 ansible-ui:latest，镜像可能损坏，请重新导出。" >&2
+    exit 1
+  fi
+
+  # --no-build：离线环境不构建，直接用刚载入的镜像
+  docker compose up -d --no-build
+  print_url
+  echo "  升级版本：载入新包后执行 docker compose up -d --force-recreate"
+}
+
 usage() {
-  echo "用法: $0 {up|cert|http|build|sync|frontend|down|restart|logs|status|config}"
+  echo "用法: $0 {up|cert|http|load|export|build|sync|frontend|down|restart|logs|status|config}"
   echo ""
   echo "  up          构建镜像并启动（端口/协议由 .env 决定）"
   echo "  cert [名称…] 生成自签证书并自动开启 HTTPS，可给多个域名/IP"
   echo "              例： $0 cert 192.168.1.10"
   echo "                   $0 cert ansible.example.com 192.168.1.10"
   echo "  http        关闭 HTTPS，回到明文 HTTP"
+  echo "  export [名] 导出离线部署包（镜像+compose+脚本+证书），给不能联网的机器用"
+  echo "              例： $0 export                     # ansible-ui-offline-20261125.tar.gz"
+  echo "                   $0 export /tmp/abc.tar.gz"
+  echo "  load [包]   在离线机器上载入镜像并启动，不构建、不需要网络"
+  echo "              不带参数时读当前目录的 image.tar（已解包的包目录里）"
   echo "  build       仅构建镜像，不启动"
   echo "  sync        从项目根同步后端源码到 deploy/app（开发机用）"
   echo "  frontend    本地构建前端并同步到 deploy/dist（需要 Node.js）"
@@ -328,6 +444,31 @@ case "${1:-up}" in
     ;;
   http)
     disable_tls
+    ;;
+  export)
+    export_image "${2:-}"
+    ;;
+  load)
+    require_docker
+    pkg="${2:-}"
+    if [ -z "$pkg" ]; then
+      do_load
+    else
+      if [ ! -f "$pkg" ]; then
+        echo "找不到离线包：$pkg" >&2
+        exit 1
+      fi
+      echo "==> 解包 $pkg"
+      tar xzf "$pkg"
+      top="$(basename "$pkg")"
+      top="${top%.tar.gz}"; top="${top%.tgz}"
+      if [ ! -d "$top" ]; then
+        echo "!! 解包后没有找到目录 $top。" >&2
+        echo "   请手动进入解包目录，在那里执行 ./deploy.sh load" >&2
+        exit 1
+      fi
+      ( cd "$top" && ./deploy.sh load )
+    fi
     ;;
   build)
     require_docker
