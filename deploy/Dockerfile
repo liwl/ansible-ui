@@ -3,9 +3,16 @@ FROM node:22-alpine AS frontend
 
 WORKDIR /build
 
+# 可覆盖的 npm 源：国内构建时传 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+# 不传就用官方源，海外环境不受影响。
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
 # 先复制依赖清单，利用 Docker 层缓存
 COPY web/package.json web/pnpm-lock.yaml ./
-RUN npm install -g pnpm@12 && pnpm install --frozen-lockfile
+RUN npm config set registry "$NPM_REGISTRY" \
+    && npm install -g pnpm@12 \
+    && pnpm config set registry "$NPM_REGISTRY" \
+    && pnpm install --frozen-lockfile
 
 COPY web/ ./
 RUN pnpm run build
@@ -16,6 +23,13 @@ RUN pnpm run build
 # 用 slim 而不是 alpine：ansible-core 2.13 对 musl 支持不佳，Debian 兼容性更好。
 FROM python:3.10-slim
 
+# 可覆盖的 pip 源与 Debian 源：国内构建时传
+#   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+#   --build-arg DEBIAN_MIRROR=mirrors.aliyun.com
+# pip 装 ansible + cryptography 有大包，用官方源在国内基本会超时。
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG DEBIAN_MIRROR=deb.debian.org
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Shanghai \
@@ -24,14 +38,19 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # openssh-client：ansible 依赖；sshpass：密码认证；curl：健康检查
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    if [ "$DEBIAN_MIRROR" != "deb.debian.org" ]; then \
+        sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+        || sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
         openssh-client \
         sshpass \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
 # 先复制静态资源目录（保留 robots.txt），再用构建产物覆盖
 COPY public/ ./public/

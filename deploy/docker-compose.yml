@@ -3,6 +3,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      # 构建期的包源，可在 .env 里覆盖。国内网络务必改镜像源，
+      # 否则 pip 装 ansible/cryptography 基本会超时。
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-deb.debian.org}
     image: ansible-ui:latest
     container_name: ansible-ui
     restart: unless-stopped
