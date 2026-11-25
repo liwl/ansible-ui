@@ -40,3 +40,7 @@ Thumbs.db
 
 # WorkBuddy 工作目录（记忆/临时文件），不入库
 .workbuddy/
+
+# 打包产物
+*.tar.gz
+*.zip
