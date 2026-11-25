@@ -55,6 +55,15 @@ prepare() {
     fi
   done
 
+  # 提醒前端产物是否过期：改了 web/src 却忘了重新 build，镜像里会是旧页面且不会报错
+  if [ -f dist/index.html ] && [ -d "$PROJECT_ROOT/web/src" ]; then
+    stale="$(find "$PROJECT_ROOT/web/src" "$PROJECT_ROOT/web/index.html" -type f -newer dist/index.html 2>/dev/null | head -1 || true)"
+    if [ -n "$stale" ]; then
+      echo "    ⚠ 检测到前端源码比 deploy/dist 新（$(basename "$stale")）"
+      echo "      如果改动涉及前端，请先执行： $0 frontend"
+    fi
+  fi
+
   echo "    后端文件：$(ls context/app | wc -l | tr -d ' ') 个 .py"
   echo "    静态文件：$(find context/public -type f | wc -l | tr -d ' ') 个"
 }
