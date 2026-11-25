@@ -9,6 +9,14 @@
 *.bat   text eol=crlf
 *.cmd   text eol=crlf
 
+# 环境变量与容器相关文件必须 LF。
+# .env 若带 CRLF，compose 的 env_file 会把 \r 一并读进变量值，
+# 表现为「密码怎么输都不对」「证书路径明明在却说找不到」这类玄学问题。
+.env*           text eol=lf
+*.dockerignore  text eol=lf
+Dockerfile      text eol=lf
+*.conf          text eol=lf
+
 # 前端构建产物：原样进出，不做任何行尾转换（会被直接打进镜像）
 deploy/dist/**  -text
 web/dist/**     -text
