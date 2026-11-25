@@ -39,35 +39,35 @@
 
 ![1](./.github/demo/1.jpg)
 
----
+*主机管理：状态统计、批量操作，表头可点击排序*
 
 ![2](./.github/demo/2.jpg)
 
----
+*主机表底部：分页与每页条数切换*
 
 ![3](./.github/demo/3.jpg)
 
----
+*执行历史：按主机 / 状态 / 时间过滤，成功与失败一眼区分*
 
 ![4](./.github/demo/4.jpg)
 
----
+*Playbook 列表：执行、导出、编辑*
 
 ![5](./.github/demo/5.jpg)
 
----
+*用户管理：admin / viewer 双角色，主管理员不可降级*
 
 ![6](./.github/demo/6.jpg)
 
----
+*Playbook 在线编辑*
 
 ![7](./.github/demo/7.jpg)
 
----
+*暗色模式下的主机管理*
 
 ![8](./.github/demo/8.jpg)
 
----
+*暗色模式下的执行历史*
 
 ## 部署
 
