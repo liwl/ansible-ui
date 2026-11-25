@@ -27,8 +27,10 @@ deploy/.env
 *.pem
 *.key
 
-# ---------- Docker 构建上下文（由 deploy.sh prepare 自动生成）----------
-deploy/context/
+# ---------- Docker 构建产物 ----------
+# deploy/app 与 deploy/dist 是「发布包」的一部分，需要入库，
+# 这样部署目录可以单独拷到服务器构建（不需要 node、不需要项目其余部分）。
+deploy/__pycache__/
 
 # ---------- 编辑器与系统 ----------
 .vscode/

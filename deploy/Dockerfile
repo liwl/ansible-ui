@@ -1,15 +1,16 @@
 # ============================================================
 # 运行时镜像：只负责打包，不做任何编译
 #
-# 前端产物（dist）和 Python 源码都在「外部」准备好，
-# docker build 只做三件事：装 Python 依赖、拷贝源码、拷贝静态资源。
+# 构建上下文 = 当前 deploy 目录，里面自带全部构建输入：
+#   app/               后端源码（deploy.sh sync 从项目根同步）
+#   dist/              前端产物（deploy.sh frontend 生成）
+#   requirements.txt   Python 依赖
 #
-# 构建上下文 = deploy 目录（不是项目根），所以不会把
-# web/node_modules 那 210MB 传进 Docker daemon。
+# 因此这个目录可以单独拷到任意一台装了 Docker 的机器上构建，
+# 不需要项目其余部分，也不需要 Node.js。
 #
-# 标准流程：
-#   ./deploy.sh frontend    # 本地构建前端 → deploy/dist（需要 node）
-#   ./deploy.sh up          # 组装 context → 构建镜像 → 启动
+# 用法：
+#   docker compose up -d --build      （或 ./deploy.sh up）
 # ============================================================
 FROM python:3.10-slim
 
@@ -36,14 +37,14 @@ RUN set -eux; \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY context/requirements.txt ./
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
 # 后端源码
-COPY context/app/ ./
+COPY app/ ./
 
 # 前端已构建产物 + 静态文件（robots.txt 等）
-COPY context/public/ ./public/
+COPY dist/ ./public/
 
 # 运行时目录由 compose 的 volume 接管，这里先建好空目录
 RUN mkdir -p db logs data /tmp/ansible_uploads
