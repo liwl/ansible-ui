@@ -93,15 +93,26 @@ function TerminalPage() {
       };
 
       socket.current.onmessage = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.error) {
-            term.current?.write(`\r\n\x1b[1;31m*** 错误: ${data.error} ***\x1b[0m\r\n`);
-            return;
+        const text = typeof event.data === 'string' ? event.data : '';
+
+        // 后端只在出错时下发 JSON 对象（{"error": ...}），其余一律是原始终端字节流。
+        // 不能无条件 JSON.parse 再"解析失败就当输出"：终端里 echo 回来的数字
+        // （"1"、"12"、"123\r\n"、"-1"）本身就是合法 JSON，parse 成功但又不是 error，
+        // 结果既不写回终端也不报错，字符就直接消失了——这就是"输入数字不显示"的原因。
+        // 因此只对以 { 开头的报文尝试按 JSON 解析，且仅在真有 error 字段时拦截。
+        if (text.startsWith('{')) {
+          try {
+            const msg = JSON.parse(text);
+            if (msg && msg.error) {
+              term.current?.write(`\r\n\x1b[1;31m*** 错误: ${msg.error} ***\x1b[0m\r\n`);
+              return;
+            }
+          } catch {
+            // 不是合法 JSON（比如远端输出了一段以 { 开头的普通文本），按正常输出处理
           }
-        } catch {
-          term.current?.write(event.data);
         }
+
+        term.current?.write(text);
       };
 
       socket.current.onclose = (event) => {
