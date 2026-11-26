@@ -14,6 +14,7 @@ import paramiko
 import threading
 import stat
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 import time
 import hmac
@@ -33,14 +34,20 @@ def get_client_ip():
     """获取客户端 IP。
 
     只有显式开启 TRUST_PROXY 时才采信代理头，否则一律用 TCP 直连地址。
+
+    采信顺序有讲究：
+    1. X-Real-IP —— nginx 用 `$remote_addr` 直接覆盖写入，客户端伪造不了；
+    2. X-Forwarded-For 的**最后一跳** —— 这是真正连到反代的地址。
+       不能取第一个：`$proxy_add_x_forwarded_for` 会保留客户端自己塞进来的值，
+       把它追加在真实 IP 前面，取最左等于直接采信伪造值。
     """
     if TRUST_PROXY:
-        forwarded = request.headers.get('X-Forwarded-For')
-        if forwarded:
-            return forwarded.split(',')[0].strip()
         real_ip = request.headers.get('X-Real-IP')
         if real_ip:
             return real_ip.strip()
+        forwarded = request.headers.get('X-Forwarded-For')
+        if forwarded:
+            return forwarded.split(',')[-1].strip()
     return request.remote_addr or '-'
 
 def clean_for_log(value, limit=64):
@@ -92,6 +99,14 @@ app = Flask(__name__, static_folder='public', static_url_path='')
 app.secret_key = _load_or_create_secret_key()
 JWT_EXPIRATION = int(os.getenv('JWT_EXPIRATION_HOURS', '5')) * 60 * 60
 JWT_SECRET = app.secret_key
+
+# 开了 TRUST_PROXY 才装 ProxyFix，让 X-Forwarded-Proto 生效。
+# 不装的话 request.is_secure 恒为 False——反代终止了 TLS，但 Flask 只看到
+# 明文 HTTP，结果会话 Cookie 不带 Secure、HSTS 也不下发。
+# x_for=1 表示只取 X-Forwarded-For 的最后一跳（与 get_client_ip 一致），
+# 左边那些客户端自己塞的值一律不认。x_host=0：Nginx 已用 $host 覆盖 Host 头。
+if TRUST_PROXY:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
 
 # 单个请求体上限。上传大安装包需要放宽，但绝不能无限——否则一个请求就能写满磁盘。
 MAX_UPLOAD_MB = int(os.getenv('MAX_UPLOAD_MB', '512'))

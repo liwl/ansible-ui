@@ -122,6 +122,30 @@ check_tls_ready() {
   fi
 }
 
+# 反代相关的组合风险检查：两个变量单看都对，凑一起才是坑
+check_proxy_risk() {
+  local trust bind
+  trust="$(get_env_var TRUST_PROXY)"; trust="${trust:-false}"
+  bind="$(get_env_var HOST_BIND)";   bind="${bind:-0.0.0.0}"
+  trust="$(echo "$trust" | tr '[:upper:]' '[:lower:]')"
+
+  case "$bind" in
+    127.0.0.1|localhost|::1) local loopback=1 ;;
+    *)                        local loopback=0 ;;
+  esac
+
+  if [ "$trust" = true ] && [ "$loopback" = 0 ]; then
+    echo "    ⚠ TRUST_PROXY=true 但 HOST_BIND=$bind，端口仍对外。" >&2
+    echo "      外部可以绕过反代直连端口、伪造 X-Real-IP 来绕过登录限流。" >&2
+    echo "      套反代时建议： HOST_BIND=127.0.0.1" >&2
+  fi
+
+  if [ "$trust" != true ] && [ "$loopback" = 1 ]; then
+    echo "    ⚠ HOST_BIND=127.0.0.1 但 TRUST_PROXY 未开启，反代会连不上或日志里全是反代 IP。" >&2
+    echo "      如果前面确实有反代，请在 .env 里加： TRUST_PROXY=true" >&2
+  fi
+}
+
 # 开发时提醒：根目录源码比 deploy/app 新，说明忘了 sync
 warn_stale_backend() {
   if [ -f "$PROJECT_ROOT/app.py" ] && [ -f app/app.py ]; then
@@ -390,6 +414,7 @@ do_load() {
   # 先确认配置就绪，免得白花几分钟载入镜像才被告知要改密码
   ensure_env
   check_tls_ready
+  check_proxy_risk
 
   echo "==> 载入镜像（体积较大，需要一会儿）"
   docker load -i image.tar
@@ -434,6 +459,7 @@ case "${1:-up}" in
     ensure_env
     check_inputs
     check_tls_ready
+    check_proxy_risk
     warn_stale_backend
     docker compose up -d --build
     print_url
@@ -491,6 +517,7 @@ case "${1:-up}" in
   restart)
     require_docker
     check_tls_ready
+    check_proxy_risk
     docker compose restart
     echo "已重启，若刚替换了证书，新的证书已生效。"
     ;;

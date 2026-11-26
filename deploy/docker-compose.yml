@@ -35,7 +35,12 @@ services:
       # 容器内端口恒为 PORT，HOST_PORT 控制对外端口
       # HTTP：HOST_PORT=5000 → http://IP:5000
       # HTTPS：HOST_PORT=443  → https://IP（deploy.sh cert 会自动改好）
-      - "${HOST_PORT:-5000}:${PORT:-5000}"
+      #
+      # HOST_BIND 控制绑定哪个地址：
+      #   0.0.0.0（默认）→ 所有网卡，面板直接对外
+      #   127.0.0.1      → 只绑回环，前面套 Nginx 时设成这个，
+      #                    外面只能经反代进来，防止绕过反代伪造 X-Real-IP
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-5000}:${PORT:-5000}"
 
     volumes:
       # 数据库、日志、上传文件持久化，容器重建不丢数据

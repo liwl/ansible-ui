@@ -155,6 +155,100 @@ docker run -d --name ansible-ui \
   ghcr.io/liwl/ansible-ui:latest
 ```
 
+### 反向代理部署
+
+面板可以裸跑在 5000 端口，也可以挂在 Nginx 后面统一收口（复用 443、做域名、接公司网关）。挂反代时有两件事必须做对。
+
+**一、打开 `TRUST_PROXY`**
+
+设了反代之后，Flask 看到的 `remote_addr` 永远是 Nginx 的地址（同一台机器就是 `127.0.0.1`），真实客户端 IP 只能从请求头里拿。但请求头客户端自己也能写，所以默认**不采信**：
+
+| 配置 | 后果 |
+| --- | --- |
+| `TRUST_PROXY=false`（默认） | 审计日志里所有登录都来自 `172.x.x.x`；登录限流按"同一 IP + 用户名"计数，一个人的失败会把该用户名下所有人都锁住 |
+| `TRUST_PROXY=true` + 正确的 Nginx 配置 | 拿到真实 IP，日志和限流都正常 |
+| `TRUST_PROXY=true` 但 5000 端口对外开放 | 任何人都能伪造 `X-Real-IP` 绕过登录限流，**这是最危险的组合** |
+
+所以打开它的前提是：5000 端口只在回环/内网可达，外部只能经 Nginx 进来。
+
+```bash
+# deploy/.env
+TRUST_PROXY=true
+```
+
+容器内还需让 Flask 感知到原始协议是 HTTPS，否则 `request.is_secure` 为假，会话 Cookie 不会带 `Secure`、HSTS 也不下发。Nginx 传 `X-Forwarded-Proto` 后，面板会自动采信。
+
+**二、Nginx 配置**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name ansible.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    client_max_body_size 512m;        # 与 MAX_UPLOAD_MB 保持一致，否则上传大文件会先被 Nginx 挡掉
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+
+        # 真实 IP：X-Real-IP 是覆盖写入，客户端伪造的值会被丢弃
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket（/ws/exec 实时终端、/ws/... 任务输出）必须放行 Upgrade
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # 终端是长连接，默认 60s 会在空闲时被掐断
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+        proxy_buffering     off;      # 命令输出要实时透传，缓冲会攒着不发
+    }
+}
+
+server {
+    listen 80;
+    server_name ansible.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+`$connection_upgrade` 需要先在 `http` 块里定义（Nginx 1.25 以下没有内置）：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+**关于 `X-Forwarded-For` 的一个坑**：`$proxy_add_x_forwarded_for` 的语义是"把 `$remote_addr` **追加**到已有的 XFF 后面"，而"已有"那部分正是客户端自己发来的。所以一条伪造请求到后端长这样：
+
+```
+X-Forwarded-For: 1.2.3.4        ← 客户端塞的假 IP
+X-Forwarded-For: 1.2.3.4, 203.0.113.7   ← Nginx 追加真实 IP 后
+```
+
+面板取的是**最后一跳**（`203.0.113.7`），不是最左边的 `1.2.3.4`；同时优先用 `X-Real-IP`——它由 `$remote_addr` 直接覆盖写入，没有追加语义，天生防伪造。
+
+如果 Nginx 前面还有一层（CDN、云负载均衡），把那里也配成覆盖写入 `X-Real-IP`，或者用 `real_ip_header` 模块让 Nginx 自己解析可信链路，面板不用改。
+
+**容器网络说明**：默认端口发布到 `0.0.0.0`，也就是绕过反代也能直连。Nginx 跑在宿主机上时，把它收回到回环：
+
+```bash
+# deploy/.env
+HOST_BIND=127.0.0.1
+```
+
+改完 `./deploy.sh restart` 生效，此后 `ss -lntp | grep 5000` 应该只看到 `127.0.0.1:5000`。
+
+若 Nginx 本身也是容器，把两者放进同一自定义网络，`proxy_pass` 指向 `http://ansible-ui:5000`，同时 `HOST_BIND=127.0.0.1` 或不发布端口都可以。
+
 ## 部署脚本
 
 `deploy/deploy.sh` 的子命令：
@@ -184,6 +278,7 @@ docker run -d --name ansible-ui \
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `HOST_PORT` | `5000` | 宿主机映射端口。开 HTTPS 时会被设为 `443` |
+| `HOST_BIND` | `0.0.0.0` | 监听地址。套反代时设为 `127.0.0.1`，避免绕过反代直连 |
 | `PORT` | `5000` | 容器内 Flask 监听端口，一般不用改 |
 | `SSL_CERT_FILE` / `SSL_KEY_FILE` | 空 | 证书在**容器内**的路径，留空即明文 HTTP |
 
