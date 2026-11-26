@@ -5,6 +5,8 @@ from ansible_manager import AnsibleManager
 import json
 import os
 import sys
+import tempfile
+from urllib.parse import quote
 from functools import wraps
 import secrets
 from flask_sock import Sock
@@ -22,15 +24,31 @@ import logging
 from logging.handlers import RotatingFileHandler
 from crypto_utils import CryptoUtils, set_crypto_keys, derive_key_from_credentials
 
+# 是否信任反向代理传来的 X-Forwarded-For / X-Real-IP。
+# 默认不信任：没有反代时这两个头任何人都能伪造，会污染审计日志，
+# 也会让基于 IP 的登录限流形同虚设。前面套了 Nginx/Caddy 再打开。
+TRUST_PROXY = os.getenv('TRUST_PROXY', 'false').lower() in ('1', 'true', 'yes')
+
 def get_client_ip():
-    """获取客户端真实IP地址
-    优先从代理转发的头信息中获取真实IP，如不存在则返回直连IP
+    """获取客户端 IP。
+
+    只有显式开启 TRUST_PROXY 时才采信代理头，否则一律用 TCP 直连地址。
     """
-    if request.headers.get('X-Forwarded-For'):
-        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
-    elif request.headers.get('X-Real-IP'):
-        return request.headers.get('X-Real-IP')
-    return request.remote_addr
+    if TRUST_PROXY:
+        forwarded = request.headers.get('X-Forwarded-For')
+        if forwarded:
+            return forwarded.split(',')[0].strip()
+        real_ip = request.headers.get('X-Real-IP')
+        if real_ip:
+            return real_ip.strip()
+    return request.remote_addr or '-'
+
+def clean_for_log(value, limit=64):
+    """把用户可控内容压成单行，避免 \\r\\n 伪造日志行（日志注入）"""
+    if value is None:
+        return ''
+    text = str(value).replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    return text[:limit]
 
 def _load_or_create_secret_key():
     """获取 Flask 密钥。
@@ -74,6 +92,10 @@ app = Flask(__name__, static_folder='public', static_url_path='')
 app.secret_key = _load_or_create_secret_key()
 JWT_EXPIRATION = int(os.getenv('JWT_EXPIRATION_HOURS', '5')) * 60 * 60
 JWT_SECRET = app.secret_key
+
+# 单个请求体上限。上传大安装包需要放宽，但绝不能无限——否则一个请求就能写满磁盘。
+MAX_UPLOAD_MB = int(os.getenv('MAX_UPLOAD_MB', '512'))
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
 db = Database()
 ansible = AnsibleManager(db)
 crypto = CryptoUtils()
@@ -96,23 +118,60 @@ def allowed_file(filename):
     return True
 
 def handle_error(f):
-    """错误处理装饰器"""
+    """错误处理装饰器
+
+    异常细节只写服务端日志，不回给客户端——异常文本里常带 SQL 片段、
+    绝对路径、内部主机名，属于典型的信息泄露。
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except Exception as e:
-            app.logger.error(f"Error in {f.__name__}: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+        except Exception:
+            app.logger.exception(f"Error in {f.__name__}")
+            return jsonify({'error': '服务器内部错误，请查看服务端日志'}), 500
     return decorated_function
 
+def describe_ssh_error(exc):
+    """把 SSH/SFTP 异常转成对用户有用、但不泄露内部细节的提示。
+
+    原始异常里常带绝对路径、内部主机名、Python 栈片段，直接回给客户端
+    属于信息泄露。这里按特征归类，完整堆栈仍写服务端日志。
+    """
+    text = (str(exc) or exc.__class__.__name__).lower()
+    if 'authentication failed' in text or 'auth fail' in text or 'bad authentication' in text:
+        return '认证失败，请检查主机的用户名、密码或密钥配置'
+    if 'timed out' in text or 'timeout' in text:
+        return '连接超时，请检查网络连通性与目标端口'
+    if 'connection refused' in text:
+        return '连接被拒绝，请确认目标主机 SSH 服务已启动'
+    if 'no such file' in text:
+        return '文件或目录不存在'
+    if 'permission denied' in text:
+        return '权限不足，目标账号无法操作该路径'
+    if 'no space left' in text:
+        return '目标主机磁盘空间不足'
+    return '远程操作失败，详情请查看服务端日志'
+
+
 def get_request_token():
-    """从请求中提取JWT令牌"""
+    """从请求中提取 JWT 令牌
+
+    Authorization 头优先，其次 cookie（兼容旧前端）。
+    query 参数只在 /ws/ 下放行：浏览器的 WebSocket 无法携带自定义头，
+    而普通 API 用 ?token= 会把令牌写进代理日志和浏览器历史。
+    """
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         return auth_header.split(' ', 1)[1]
 
-    return request.cookies.get('token') or request.args.get('token')
+    cookie_token = request.cookies.get('token')
+    if cookie_token:
+        return cookie_token
+
+    if request.path.startswith('/ws/'):
+        return request.args.get('token')
+    return None
 
 def ensure_crypto_key():
     """确保运行期加密密钥已初始化"""
@@ -249,7 +308,43 @@ def before_request():
 
 @app.after_request
 def after_request(response):
-    
+    # ---------- 安全响应头 ----------
+    # 防 MIME 嗅探：避免上传的 .txt 被当 html 执行
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    # 防点击劫持
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    # 不让外部站点拿到来源路径（路径里可能有主机 id 之类的信息）
+    response.headers.setdefault('Referrer-Policy', 'no-referrer')
+    response.headers.setdefault(
+        'Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()'
+    )
+    response.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+
+    # CSP：令牌存在 localStorage，一旦被 XSS 拿到等同账号沦陷。
+    # 前端是 Vite 打包的 SPA，主题脚本内联在 index.html，Radix/Tailwind 依赖行内样式，
+    # 所以这里保留 'unsafe-inline'；它拦不住内联脚本，但能挡掉外链脚本、
+    # 内联事件属性之外的注入面，以及 object/iframe 类加载。
+    if not app.debug:
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'"
+        )
+
+    # HSTS 只在确认走 HTTPS 时下发（明文端口下发会让浏览器以后强制 https 而打不开）
+    if request.is_secure or os.getenv('ENABLE_HSTS', 'false').lower() in ('1', 'true', 'yes'):
+        response.headers.setdefault(
+            'Strict-Transport-Security', 'max-age=15552000; includeSubDomains'
+        )
+
     if request.path.startswith("/api/"):
         status = 'success' if response.status_code < 400 else 'failed'
         user = getattr(request, 'user', None) or {}
@@ -286,6 +381,53 @@ def ensure_primary_admin():
             app.logger.info(f"已将 {ADMIN_USERNAME} 补标记为主管理员")
 
 
+# ---------- 登录失败限流 ----------
+# 进程内计数，单容器部署够用。多副本需要换成 Redis，或者交给网关限流。
+# 键是「IP + 用户名」，避免同一出口 IP 下的其他账号被连坐。
+_login_failures = {}
+_login_lock = threading.Lock()
+LOGIN_MAX_FAILURES = int(os.getenv('LOGIN_MAX_FAILURES', '8'))
+LOGIN_LOCK_SECONDS = int(os.getenv('LOGIN_LOCK_SECONDS', '900'))
+
+
+def _login_throttle_key(username):
+    return f"{get_client_ip()}|{clean_for_log(username)}"
+
+
+def login_lock_remaining(key):
+    """剩余锁定秒数，0 表示未锁定"""
+    now = time.time()
+    with _login_lock:
+        record = _login_failures.get(key)
+        if not record:
+            return 0
+        failures, last = record
+        if failures < LOGIN_MAX_FAILURES:
+            return 0
+        remain = int(LOGIN_LOCK_SECONDS - (now - last))
+        if remain <= 0:
+            _login_failures.pop(key, None)
+            return 0
+        return remain
+
+
+def login_note_failure(key):
+    now = time.time()
+    with _login_lock:
+        failures, _ = _login_failures.get(key, (0, now))
+        _login_failures[key] = (failures + 1, now)
+        # 顺手清理过期记录，避免被大量随机用户名撑爆内存
+        if len(_login_failures) > 2000:
+            cutoff = now - LOGIN_LOCK_SECONDS
+            for stale in [k for k, (_, ts) in _login_failures.items() if ts < cutoff]:
+                _login_failures.pop(stale, None)
+
+
+def login_reset(key):
+    with _login_lock:
+        _login_failures.pop(key, None)
+
+
 @app.route('/api/login', methods=['POST'])
 def login():
     """用户登录：优先查 users 表，兼容环境变量里的管理员凭证"""
@@ -295,6 +437,19 @@ def login():
 
     if not username or not password:
         return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
+
+    # 暴力破解防护：同一 IP + 用户名连续失败到阈值后锁定一段时间
+    throttle_key = _login_throttle_key(username)
+    remaining = login_lock_remaining(throttle_key)
+    if remaining:
+        app.logger.warning(
+            "登录被限流: ip=%s user=%s 剩余=%ss",
+            get_client_ip(), clean_for_log(username), remaining
+        )
+        return jsonify({
+            'success': False,
+            'message': f'失败次数过多，请 {remaining} 秒后再试',
+        }), 429
 
     ensure_primary_admin()
 
@@ -330,8 +485,11 @@ def login():
                 account = db.get_user_by_username(ADMIN_USERNAME)
 
     if not verified or not account:
-        app.logger.warning(f"登录失败，用户名或密码不正确: {username}")
+        login_note_failure(throttle_key)
+        app.logger.warning("登录失败，用户名或密码不正确: %s", clean_for_log(username))
         return jsonify({'success': False, 'message': '用户名或密码不正确'}), 401
+
+    login_reset(throttle_key)
 
     try:
         # 主管理员的凭证参与主机密码加密密钥的派生，必须保持原行为
@@ -358,7 +516,9 @@ def login():
             token,
             max_age=JWT_EXPIRATION,
             httponly=True,
-            samesite='Lax'
+            samesite='Lax',
+            # HTTPS 下标记 Secure，防止令牌被明文链路带出去
+            secure=request.is_secure,
         )
         return response
     except Exception as e:
@@ -700,7 +860,8 @@ def terminal_ws(ws, host_id):
             hashlib.sha256
         ).hexdigest()
         
-        if parts[2] != expected_signature:
+        # 定长比较，避免逐字节比较泄露签名前缀
+        if not hmac.compare_digest(parts[2], expected_signature):
             raise ValueError("Invalid token signature")
             
     except Exception:
@@ -807,7 +968,7 @@ def sftp_list(host_id):
             return jsonify(file_list)
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/mkdir', methods=['POST'])
 @handle_error
@@ -834,7 +995,7 @@ def sftp_mkdir(host_id):
         return jsonify({'success': True})
     except Exception as e:
         app.logger.error(f"SFTP mkdir error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/upload', methods=['POST'])
 @handle_error
@@ -858,7 +1019,10 @@ def sftp_upload(host_id):
                     filename = secure_filename(file.filename)
                     remote_path = os.path.join(path, filename).replace('\\', '/')
 
-                    temp_path = os.path.join('/tmp', filename)
+                    # 独立临时文件：固定的 /tmp/<文件名> 会让并发上传互相覆盖，
+                    # 极端情况下把 A 的文件传到 B 的主机上
+                    fd, temp_path = tempfile.mkstemp(prefix='ansible_upload_')
+                    os.close(fd)
                     file.save(temp_path)
 
                     try:
@@ -870,7 +1034,7 @@ def sftp_upload(host_id):
         return jsonify({'success': True})
     except Exception as e:
         app.logger.error(f"SFTP upload error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/rename', methods=['POST'])
 @handle_error
@@ -899,7 +1063,7 @@ def sftp_rename(host_id):
         return jsonify({'success': True})
     except Exception as e:
         app.logger.error(f"SFTP rename error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/touch', methods=['POST'])
 @handle_error
@@ -928,7 +1092,7 @@ def sftp_touch(host_id):
         return jsonify({'success': True})
     except Exception as e:
         app.logger.error(f"SFTP touch error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/read')
 @handle_error
@@ -948,7 +1112,7 @@ def sftp_read(host_id):
             return jsonify({'content': content})
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/write', methods=['POST'])
 @handle_error
@@ -973,7 +1137,7 @@ def sftp_write(host_id):
 
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/delete', methods=['POST'])
 @handle_error
@@ -1002,7 +1166,7 @@ def sftp_delete(host_id):
 
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
 
 @app.route('/api/sftp/<int:host_id>/download')
 @handle_error
@@ -1024,8 +1188,9 @@ def sftp_download(host_id):
             if stat.S_ISDIR(file_attr.st_mode):
                 return jsonify({'error': 'Cannot download a directory'}), 400
 
-            # 仅使用文件名，避免目录遍历。
-            temp_path = os.path.join('/tmp', secure_filename(filename))
+            # 独立临时文件：避免并发下载同名文件时读到别人的内容（横向泄露）
+            fd, temp_path = tempfile.mkstemp(prefix='ansible_download_')
+            os.close(fd)
             sftp.get(path, temp_path)
 
             try:
@@ -1034,7 +1199,11 @@ def sftp_download(host_id):
 
                 response = Response(content)
                 response.headers['Content-Type'] = 'application/octet-stream'
-                response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+                # 用 RFC 5987 的 filename* 传文件名：中文可用，也不会因为
+                # 文件名里的引号/换行把响应头截断（头注入）
+                response.headers['Content-Disposition'] = (
+                    f"attachment; filename*=UTF-8''{quote(filename)}"
+                )
                 return response
             finally:
                 if os.path.exists(temp_path):
@@ -1042,7 +1211,15 @@ def sftp_download(host_id):
     
     except Exception as e:
         app.logger.error(f"SFTP download error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': describe_ssh_error(e)}), 500
+
+@app.errorhandler(413)
+def payload_too_large(error):
+    """请求体超过 MAX_CONTENT_LENGTH（默认 512MB，可用环境变量调整）"""
+    if request.path.startswith('/api/'):
+        return jsonify({'error': f'请求体过大，单次上限 {MAX_UPLOAD_MB} MB'}), 413
+    return 'Request Entity Too Large', 413
+
 
 @app.errorhandler(404)
 def not_found_error(error):
@@ -1115,8 +1292,10 @@ def create_user():
 
     if not username or len(username) < 2:
         return jsonify({'error': '用户名至少 2 个字符'}), 400
-    if len(password) < 6:
-        return jsonify({'error': '密码至少 6 位'}), 400
+    if len(password) < 8:
+        return jsonify({'error': '密码至少 8 位'}), 400
+    if password.lower() == username.lower():
+        return jsonify({'error': '密码不能与用户名相同'}), 400
     if role not in ('admin', 'viewer'):
         return jsonify({'error': '角色只能是 admin 或 viewer'}), 400
     if db.get_user_by_username(username):
@@ -1124,8 +1303,9 @@ def create_user():
 
     try:
         user_id = db.create_user(username, generate_password_hash(password), role=role)
-    except Exception as e:
-        return jsonify({'error': f'创建失败: {str(e)}'}), 400
+    except Exception:
+        app.logger.exception(f"创建用户失败: {clean_for_log(username)}")
+        return jsonify({'error': '创建失败，请查看服务端日志'}), 400
 
     app.logger.info(f"管理员 {request.user.get('username')} 创建了用户 {username}({role})")
     return jsonify({'user_id': user_id, 'message': '用户创建成功'}), 201
@@ -1155,8 +1335,10 @@ def update_user(user_id):
 
     password_hash = None
     if password:
-        if len(password) < 6:
-            return jsonify({'error': '密码至少 6 位'}), 400
+        if len(password) < 8:
+            return jsonify({'error': '密码至少 8 位'}), 400
+        if password.lower() == (account.get('username') or '').lower():
+            return jsonify({'error': '密码不能与用户名相同'}), 400
         password_hash = generate_password_hash(password)
 
     db.update_user(user_id, password_hash=password_hash, role=role)

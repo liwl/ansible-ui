@@ -192,9 +192,14 @@ docker run -d --name ansible-ui \
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `ADMIN_USERNAME` | `admin` | 主管理员用户名 |
-| `ADMIN_PASSWORD` | `change-me-please` | 主管理员密码，**必须修改** |
+| `ADMIN_PASSWORD` | `change-me-please` | 主管理员密码，**必须修改**（至少 8 位） |
 | `SECRET_KEY` | 空 | JWT 签名密钥。留空时自动生成并保存到 `data/.secret_key`，重启后复用 |
 | `JWT_EXPIRATION_HOURS` | `5` | 登录令牌有效期（小时） |
+| `LOGIN_MAX_FAILURES` | `8` | 同一 IP + 用户名连续登录失败几次后锁定 |
+| `LOGIN_LOCK_SECONDS` | `900` | 锁定时长（秒），到期自动解锁 |
+| `MAX_UPLOAD_MB` | `512` | 单个请求体上限（MB），防止一个请求写满磁盘 |
+| `TRUST_PROXY` | `false` | 前面套了反向代理时才改为 `true`，否则 X-Forwarded-For 可被伪造 |
+| `ENABLE_HSTS` | `false` | 确认全链路 HTTPS 后打开，会下发 HSTS 头 |
 
 **数据与日志**
 
@@ -278,6 +283,8 @@ npm run dev
 ## 注意事项
 
 - **安全声明**：任何系统都无法保证没有 BUG。暴露到公网时，建议前面再套一层带 IP 白名单的反向代理，并使用强密码。
+- **内置防护**：登录失败限流（默认 8 次 / 锁 15 分钟）、请求体大小上限、CSP 与一整套安全响应头、SFTP 异常不外泄内部细节、登录令牌不接受 URL 传参（仅 WebSocket 例外）。
+- **套反代要设 `TRUST_PROXY=true`**：否则日志里记录的全是反代 IP，登录限流也会把所有人生成同一个键。反过来，直接对外时**不要**打开它，否则谁都能伪造来源 IP。
 - **改密码的代价**：主机密码用管理员凭证派生的密钥加密。修改 `ADMIN_PASSWORD` 后，此前保存的主机密码将无法解密，需要重新录入。
 - **主管理员唯一来源**：主管理员凭证以 `.env` 为准，界面上无法删除或降级。
 - **`viewer` 角色是只读的**：可以浏览主机、历史、文件与 Playbook，但所有写操作（含终端）会被后端拒绝。

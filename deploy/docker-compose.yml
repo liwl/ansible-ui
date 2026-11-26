@@ -14,6 +14,11 @@ services:
     container_name: ansible-ui
     restart: unless-stopped
 
+    # 禁止容器内的进程通过 setuid 等机制提权（容器本身已是 root，
+    # 但这条能挡住被利用后进一步拿到宿主能力的常见路径）
+    security_opt:
+      - no-new-privileges:true
+
     # .env 与 compose 文件同目录，变量替换和环境变量都从这里读
     env_file:
       - .env
