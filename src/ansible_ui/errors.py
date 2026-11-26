@@ -70,5 +70,20 @@ def not_found_error(error):
 
 @app.errorhandler(500)
 def internal_error(error):
-    """处理500错误"""
+    """处理未捕获异常。
+
+    必须在这里记堆栈：handle_error 只覆盖被它装饰的视图函数，
+    而 before_request / after_request / 静态路由 / 蓝图注册阶段的异常
+    会直接落到这里。原来这里只返回 JSON 不打日志，
+    线上表现就是「页面 500，但日志里什么都没有」。
+    """
+    original = getattr(error, 'original_exception', None)
+    if original is not None:
+        app.logger.exception(
+            "未捕获异常: %s %s", request.method, request.path, exc_info=original
+        )
+    else:
+        app.logger.error(
+            "500 错误: %s %s (%s)", request.method, request.path, error
+        )
     return jsonify({'error': 'Internal server error'}), 500

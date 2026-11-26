@@ -16,7 +16,11 @@ from .extensions import app
 
 
 def setup_logging():
-    """日志写文件 + 控制台，级别由 LOG_LEVEL 决定。"""
+    """日志双写：文件（持久化、可回溯）+ stdout（docker logs 直接看）。
+
+    只写文件的话 `docker logs` 一片空白，容器里出问题必须 exec 进去捞文件，
+    排障成本极高——这正是线上 500 查不到原因的直接原因。
+    """
     os.makedirs(os.path.dirname(config.LOG_FILE) or '.', exist_ok=True)
     file_handler = RotatingFileHandler(
         config.LOG_FILE,
@@ -27,10 +31,17 @@ def setup_logging():
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
     ))
 
+    # 进容器日志：只保留单行摘要，堆栈由文件里的详细格式承载
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s %(name)s: %(message)s'
+    ))
+
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
     root_logger.handlers.clear()
     root_logger.addHandler(file_handler)
+    root_logger.addHandler(stream_handler)
 
 
 def build_ssl_context():
