@@ -10,12 +10,40 @@ import secrets
 from pathlib import Path
 
 # ---------- 路径 ----------
-# PACKAGE_DIR = .../src/ansible_ui，BASE_DIR = 包的上两级
-#   Docker 内：/app          前端产物 COPY 到 /app/public
-#   本地源码：<项目根>        前端产物在 <项目根>/public
 PACKAGE_DIR = Path(__file__).resolve().parent
-BASE_DIR = PACKAGE_DIR.parent.parent
-STATIC_DIR = BASE_DIR / 'public'
+
+
+def resolve_static_dir(package_dir=None):
+    """定位前端产物目录（index.html 所在处）。
+
+    不能用固定层数推导，因为两种布局的深度不同：
+      源码：  <项目根>/src/ansible_ui   → 包的上两级才是项目根
+      镜像：  /app/ansible_ui           → 上一级就是 /app（Dockerfile 里 COPY src/ ./）
+    所以从包目录逐级向上找第一个真正含 public/index.html 的目录，两种布局都能命中。
+    也支持用 STATIC_DIR 环境变量显式覆盖。
+
+    package_dir 参数只为测试注入，正常调用无需传。
+    """
+    override = os.getenv('STATIC_DIR')
+    if override:
+        return Path(override)
+
+    pkg = Path(package_dir).resolve() if package_dir else PACKAGE_DIR
+
+    # 首选含 index.html 的目录；退而求其次返回"存在但为空"的 public，
+    # 这样前端产物缺失时，报错信息里的路径也是准的（便于直接去补文件）。
+    found_but_empty = None
+    for base in (pkg, *pkg.parents):
+        candidate = base / 'public'
+        if (candidate / 'index.html').is_file():
+            return candidate
+        if found_but_empty is None and candidate.is_dir():
+            found_but_empty = candidate
+
+    return found_but_empty or pkg.parent.parent / 'public'
+
+
+STATIC_DIR = resolve_static_dir()
 
 
 def _env_bool(name, default=False):

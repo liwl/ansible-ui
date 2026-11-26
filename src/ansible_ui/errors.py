@@ -3,6 +3,7 @@
 原则：异常细节只写服务端日志，回给客户端的永远是归类后的通用文案，
 避免把 SQL 片段、绝对路径、内部主机名泄露出去。
 """
+import os
 from functools import wraps
 
 from flask import jsonify, request, send_from_directory
@@ -60,11 +61,25 @@ def payload_too_large(error):
 @app.errorhandler(404)
 def not_found_error(error):
     """处理404错误"""
-    app.logger.error(f"404错误: 路径={request.path}, IP={request.remote_addr}, 方法={request.method}")
-    
+    app.logger.warning(f"404错误: 路径={request.path}, IP={request.remote_addr}, 方法={request.method}")
+
     if request.path.startswith('/api/') or request.path.startswith('/ws/'):
         return jsonify({'error': 'Not found'}), 404
-    
+
+    # 前端产物缺失时不能再 send_from_directory：那会在错误处理器里二次抛 NotFound，
+    # Flask 随即把 404 升级成 500，最终只看到一句 "Internal server error"，
+    # 完全看不出是"没打包前端"。这里显式报 503，指向真正的问题。
+    if not os.path.isfile(os.path.join(app.static_folder or '', 'index.html')):
+        app.logger.error(
+            "前端产物缺失：%s/index.html 不存在，页面无法渲染。"
+            "请确认部署包里有 dist/index.html（构建前端后重新打包）。",
+            app.static_folder,
+        )
+        return jsonify({
+            'error': '前端产物缺失',
+            'detail': f'{app.static_folder}/index.html 不存在，请重新构建前端产物',
+        }), 503
+
     return send_from_directory(app.static_folder, 'index.html')
 
 

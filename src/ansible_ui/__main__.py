@@ -89,8 +89,29 @@ def bootstrap():
     start_patrol_scheduler()
 
 
+def check_static_assets():
+    """启动即确认前端产物在位。
+
+    缺 index.html 时页面会一直 503，而日志里若没有明确提示，
+    表现就是"容器起来了、端口通、打开就是报错"，很难定位。
+    这里在启动阶段就把路径和结论打出来。
+    """
+    index = config.STATIC_DIR / 'index.html'
+    if index.is_file():
+        app.logger.info("前端产物目录: %s", config.STATIC_DIR)
+        return
+    app.logger.error(
+        "前端产物缺失：%s 不存在，所有页面将返回 503。"
+        "请确认部署包里有 dist/index.html（先 ./deploy.sh frontend 再重新打包），"
+        "或用环境变量 STATIC_DIR 指向正确目录。",
+        index,
+    )
+    print(f"[WARN] 前端产物缺失：{index}", file=sys.stderr, flush=True)
+
+
 def main():
     setup_logging()
+    check_static_assets()
 
     # debug 模式下 reloader 会起两个进程，只在真正的工作进程里做初始化
     if not config.FLASK_DEBUG or os.getenv('WERKZEUG_RUN_MAIN') == 'true':
