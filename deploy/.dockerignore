@@ -1,12 +1,12 @@
-# 构建只用到：app/ + dist/ + requirements.txt + Dockerfile
+# 构建只用到：src/ + dist/ + requirements.txt + Dockerfile
 # .env 里有管理员密码，绝不能发给 Docker daemon
 .env
 .env.*
 deploy.sh
 docker-compose.yml
 *.log
-app/__pycache__
-app/**/*.pyc
+src/**/__pycache__
+src/**/*.pyc
 # 证书是运行时只读挂载进容器的，不进镜像；私钥不该留在镜像层里
 certs
 context

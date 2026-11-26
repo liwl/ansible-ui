@@ -1,0 +1,43 @@
+# 路由表快照：路径|方法|处理函数|defaults
+# 变更接口时请同步更新本文件，并确认前端已适配
+/|GET|serve_react_app|{'path': ''}
+/<path:path>|GET|serve_react_app|
+/api/access-logs|GET|get_access_logs|
+/api/access-logs/cleanup|POST|cleanup_logs|
+/api/access-logs/users|GET|get_access_log_users|
+/api/execute|POST|execute_command|
+/api/hosts|GET|get_hosts|
+/api/hosts|POST|add_host|
+/api/hosts/<int:host_id>|DELETE|delete_host|
+/api/hosts/<int:host_id>|GET|get_host|
+/api/hosts/<int:host_id>|PUT|update_host|
+/api/hosts/<int:host_id>/facts|GET|get_host_facts|
+/api/hosts/<int:host_id>/ping|GET|ping_host|
+/api/hosts/batch|DELETE|delete_hosts_batch|
+/api/hosts/batch|POST|add_hosts_batch|
+/api/hosts/check-now|POST|check_hosts_now|
+/api/login|POST|login|
+/api/logs|GET|get_logs|
+/api/me|GET|get_me|
+/api/playbook/execute|POST|execute_playbook|
+/api/playbooks|GET|get_playbooks|
+/api/playbooks|POST|create_playbook|
+/api/playbooks/<int:playbook_id>|DELETE|delete_playbook|
+/api/playbooks/<int:playbook_id>|GET|get_playbook|
+/api/playbooks/<int:playbook_id>|PUT|update_playbook|
+/api/sftp/<int:host_id>/delete|POST|sftp_delete|
+/api/sftp/<int:host_id>/download|GET|sftp_download|
+/api/sftp/<int:host_id>/list|GET|sftp_list|
+/api/sftp/<int:host_id>/mkdir|POST|sftp_mkdir|
+/api/sftp/<int:host_id>/read|GET|sftp_read|
+/api/sftp/<int:host_id>/rename|POST|sftp_rename|
+/api/sftp/<int:host_id>/touch|POST|sftp_touch|
+/api/sftp/<int:host_id>/upload|POST|sftp_upload|
+/api/sftp/<int:host_id>/write|POST|sftp_write|
+/api/upload|POST|api_upload|
+/api/users|GET|list_users|
+/api/users|POST|create_user|
+/api/users/<int:user_id>|DELETE|delete_user|
+/api/users/<int:user_id>|PUT|update_user|
+/api/ws-token/<int:host_id>|GET|get_ws_token|
+/ws/terminal/<int:host_id>|GET|terminal_ws|

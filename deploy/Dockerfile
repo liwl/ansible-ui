@@ -2,9 +2,9 @@
 # 运行时镜像：只负责打包，不做任何编译
 #
 # 构建上下文 = 当前 deploy 目录，里面自带全部构建输入：
-#   app/               后端源码（deploy.sh sync 从项目根同步）
+#   src/ansible_ui/    后端源码（deploy.sh sync 从项目根 src/ 同步）
 #   dist/              前端产物（deploy.sh frontend 生成）
-#   requirements.txt   Python 依赖
+#   requirements.txt   Python 依赖（deploy.sh sync 复制）
 #
 # 因此这个目录可以单独拷到任意一台装了 Docker 的机器上构建，
 # 不需要项目其余部分，也不需要 Node.js。
@@ -41,8 +41,8 @@ RUN set -eux; \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
-# 后端源码
-COPY app/ ./
+# 后端源码（src/ 下只有 ansible_ui 包，复制后落在 /app/ansible_ui）
+COPY src/ ./
 
 # 前端已构建产物 + 静态文件（robots.txt 等）
 COPY dist/ ./public/
@@ -57,4 +57,4 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD sh -c 'if [ -n "$SSL_CERT_FILE" ]; then curl -fkS "https://127.0.0.1:${PORT:-5000}/" -o /dev/null || exit 1; else curl -fsS "http://127.0.0.1:${PORT:-5000}/" -o /dev/null || exit 1; fi'
 
-CMD ["python", "app.py"]
+CMD ["python", "-m", "ansible_ui"]

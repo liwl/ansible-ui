@@ -1,7 +1,7 @@
 services:
   ansible-ui:
     build:
-      # 构建上下文就是 deploy 目录，里面只有 app/ + dist/ + requirements.txt（几 MB），
+      # 构建上下文就是 deploy 目录，里面只有 src/ + dist/ + requirements.txt（几 MB），
       # 不会把 web/node_modules 之类的开发文件传给 Docker daemon。
       context: .
       dockerfile: Dockerfile

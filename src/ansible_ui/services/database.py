@@ -1,7 +1,8 @@
 import sqlite3
 from contextlib import contextmanager
 import os
-from crypto_utils import CryptoUtils
+from .crypto_utils import CryptoUtils
+
 
 class Database:
     def __init__(self, db_path=None):

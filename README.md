@@ -79,7 +79,8 @@
 
 ### 快速开始
 
-`deploy/` 是一个自包含的发布包——后端源码、前端产物、Dockerfile、部署脚本全在里面，单独拷到服务器就能构建，不需要 Node.js，也不需要项目其余部分。
+`deploy/` 是一个自包含的发布包——前端产物、Dockerfile、部署脚本全在里面，可以单独拷到服务器构建，不需要 Node.js。
+后端源码不在这里重复存放，`up` / `build` / `export` 执行前会自动从仓库根的 `src/ansible_ui` 同步到 `deploy/src`。
 
 ```bash
 cd deploy
@@ -266,7 +267,7 @@ HOST_BIND=127.0.0.1
 | `logs` | 实时查看日志 |
 | `status` | 查看容器状态与访问地址 |
 | `config` | 检查 compose 配置 |
-| `sync` | 开发用：把项目根的 `*.py` 同步到 `deploy/app` |
+| `sync` | 把 `src/ansible_ui` 同步到 `deploy/src`（构建前自动执行，一般不用手动调） |
 | `frontend` | 开发用：本地构建前端并同步到 `deploy/dist` |
 
 ## 配置项
@@ -339,7 +340,14 @@ ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.2.1
 
 ```bash
 pip install -r requirements.txt
-ADMIN_USERNAME=admin ADMIN_PASSWORD=dev-password PORT=5000 python app.py
+pip install -e .          # 让 src/ansible_ui 可导入
+ADMIN_USERNAME=admin ADMIN_PASSWORD=dev-password python -m ansible_ui
+```
+
+不想安装也可以临时指定源码路径：
+
+```bash
+PYTHONPATH=src ADMIN_USERNAME=admin ADMIN_PASSWORD=dev-password python -m ansible_ui
 ```
 
 前端（Vite 已配置代理到 `localhost:5000`，含 WebSocket）：
@@ -350,30 +358,63 @@ npm install
 npm run dev
 ```
 
-改完后端代码后同步进发布包，改完前端后重新构建并同步：
+改完前端后重新构建并同步到发布包（后端源码不需要同步，构建时自动取 `src/`）：
 
 ```bash
-./deploy.sh sync        # 根目录 *.py → deploy/app
 ./deploy.sh frontend    # web/dist → deploy/dist
+```
+
+跑一遍接口回归测试（零依赖，只用标准库）：
+
+```bash
+python -m unittest discover tests
 ```
 
 ## 目录结构
 
 ```
 .
-├── app.py                 # Flask 入口：路由、鉴权、WebSocket、巡检调度
-├── database.py            # SQLite 访问层（主机、用户、日志、Playbook）
-├── ansible_manager.py     # ansible / paramiko 封装，命令执行与文件传输
-├── crypto_utils.py        # 主机密码加解密（PBKDF2 派生 + AES-GCM）
-├── wincompat/             # 仅供 Windows 本地调试的模块 shim，部署用不到
-├── web/                   # React 18 + TS + Vite + Tailwind + shadcn/ui 前端
-└── deploy/                # 自包含发布包
-    ├── app/ dist/         # 后端源码副本、前端构建产物
-    ├── Dockerfile         # 唯一构建入口（根目录的 Dockerfile 是废弃守卫）
+├── src/ansible_ui/            # 后端包（唯一一份源码）
+│   ├── __init__.py            # 包入口：注册钩子、错误处理器、蓝图
+│   ├── __main__.py            # 进程入口：日志、初始化、TLS、app.run
+│   ├── config.py              # 全部环境变量集中读取（唯一来源）
+│   ├── extensions.py          # Flask app 与 db/ansible/crypto 单例
+│   ├── security.py            # 鉴权装饰器、JWT、限流、客户端 IP
+│   ├── middleware.py          # 请求钩子：只读拦截、安全头、访问日志
+│   ├── errors.py              # 统一错误处理（413/404/500）
+│   ├── utils.py               # 通用小工具
+│   ├── api/                   # 按业务拆分的蓝图，一个模块一组接口
+│   │   ├── auth.py            #   登录、当前用户
+│   │   ├── hosts.py           #   主机 CRUD、facts、连通性、手动巡检
+│   │   ├── execute.py         #   命令下发
+│   │   ├── files.py           #   SFTP 浏览编辑、批量上传
+│   │   ├── terminal.py        #   Web 终端（WebSocket）
+│   │   ├── logs.py            #   执行日志、访问审计
+│   │   ├── users.py           #   用户管理
+│   │   ├── playbooks.py       #   Playbook 保存与执行
+│   │   └── frontend.py        #   SPA 静态资源托管
+│   └── services/              # 领域服务层（不依赖请求上下文）
+│       ├── database.py        #   SQLite 访问层
+│       ├── ansible_manager.py #   ansible / paramiko 封装
+│       ├── crypto_utils.py    #   主机密码加解密（PBKDF2 + AES-GCM）
+│       ├── ssh.py             #   SSH / SFTP 连接管理
+│       └── patrol.py          #   主机巡检与定时调度
+├── web/                       # React 18 + TS + Vite + Tailwind + shadcn/ui
+├── tests/                     # 路由表回归测试（零依赖）
+├── scripts/                   # WSL 环境辅助脚本（与业务无关）
+├── pyproject.toml             # 项目元数据、ruff、pytest 配置
+├── requirements.txt           # 依赖唯一来源
+└── deploy/                    # 自包含发布包
+    ├── dist/                  #   前端构建产物（入库）
+    ├── src/                   #   构建时由 deploy.sh 从 src/ 复制（不入库）
+    ├── Dockerfile             #   唯一构建入口
     ├── docker-compose.yml
-    ├── deploy.sh          # 部署脚本
-    └── .env.example       # 配置模板
+    ├── deploy.sh              #   部署脚本
+    └── .env.example           #   配置模板
 ```
+
+后端代码只有 `src/ansible_ui` 一份。`deploy/src` 是构建前由 `./deploy.sh sync` 生成的临时副本（已 gitignore），
+这样既保证 `deploy/` 能单独拷到服务器构建，又不会出现副本与源码不一致的问题。
 
 ## 注意事项
 

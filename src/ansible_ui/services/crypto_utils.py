@@ -8,6 +8,7 @@ import hashlib
 CRYPTO_KEY = None
 CRYPTO_SALT = None
 
+
 class CryptoUtils:
     """加密工具类，用于处理密码加密和解密"""
     _instance = None
@@ -77,6 +78,7 @@ class CryptoUtils:
         """检查文本是否已加密"""
         return text and isinstance(text, str) and text.startswith("ENC:")
 
+
 def set_crypto_keys(key, salt):
     """设置加密密钥
     
@@ -102,6 +104,7 @@ def set_crypto_keys(key, salt):
     if instance is not None:
         instance.key = key
         instance.salt = salt
+
 
 def derive_key_from_credentials(username, password):
     """从用户名和密码派生加密密钥

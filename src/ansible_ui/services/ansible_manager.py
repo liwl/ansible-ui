@@ -14,7 +14,7 @@ import threading
 import re
 import socket
 import posixpath
-from crypto_utils import CryptoUtils
+from .crypto_utils import CryptoUtils
 
 # ansible-core 不支持把 Windows 当作控制节点：它依赖 fork 起 worker 进程，
 # Windows 只能 spawn，任务对象里有不可序列化的模块引用，会抛
@@ -26,8 +26,10 @@ PARAMIKO_FALLBACK = IS_WINDOWS
 # 远端命令执行超时（秒）：避免远端不返回时把请求线程挂死
 EXEC_TIMEOUT = int(os.getenv('SSH_EXEC_TIMEOUT', '120'))
 
+
 class ResultCallback(CallbackBase):
     """自定义回调类来处理任务结果"""
+
     def __init__(self):
         super().__init__()
         self.host_ok = {}
@@ -42,6 +44,7 @@ class ResultCallback(CallbackBase):
 
     def v2_runner_on_unreachable(self, result):
         self.host_unreachable[result._host.get_name()] = result
+
 
 class AnsibleManager:
     def __init__(self, db):

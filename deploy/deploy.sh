@@ -3,11 +3,14 @@
 # ansible-ui 部署脚本（自包含）
 #
 # 本目录（deploy/）就是一个完整的构建输入包：
-#   app/               后端源码
+#   src/               后端源码（./deploy.sh sync 从项目根同步，构建前必需）
 #   dist/              前端产物
-#   requirements.txt   Python 依赖
+#   requirements.txt   Python 依赖（同上，由 sync 复制）
 #   Dockerfile / docker-compose.yml / .env
 #   certs/             证书（./deploy.sh cert 生成后才有）
+#
+# src/ 与 requirements.txt 不进 Git，只在构建时由 ./deploy.sh sync 生成；
+# 仓库里因此只有一份后端代码，不会出现副本与源码不一致的问题。
 #
 # 可以单独拷到任意装了 Docker 的机器上直接：
 #   cp .env.example .env && ./deploy.sh up          # HTTP
@@ -84,10 +87,14 @@ ensure_env() {
 
 # 构建前确认输入齐全（缺了要给出明确的补救办法，而不是让 docker 报天书）
 check_inputs() {
-  if [ ! -d app ] || [ -z "$(ls -A app 2>/dev/null)" ]; then
-    echo "!! deploy/app 为空，缺少后端源码。" >&2
+  if [ ! -d src/ansible_ui ] || [ ! -f src/ansible_ui/__init__.py ]; then
+    echo "!! deploy/src 缺少后端源码。" >&2
     echo "   在完整项目里执行： ./deploy.sh sync" >&2
-    echo "   或者手动把根目录的 *.py 放进 deploy/app/" >&2
+    exit 1
+  fi
+  if [ ! -f requirements.txt ]; then
+    echo "!! deploy 缺少 requirements.txt。" >&2
+    echo "   在完整项目里执行： ./deploy.sh sync" >&2
     exit 1
   fi
   if [ ! -f dist/index.html ]; then
@@ -143,17 +150,6 @@ check_proxy_risk() {
   if [ "$trust" != true ] && [ "$loopback" = 1 ]; then
     echo "    ⚠ HOST_BIND=127.0.0.1 但 TRUST_PROXY 未开启，反代会连不上或日志里全是反代 IP。" >&2
     echo "      如果前面确实有反代，请在 .env 里加： TRUST_PROXY=true" >&2
-  fi
-}
-
-# 开发时提醒：根目录源码比 deploy/app 新，说明忘了 sync
-warn_stale_backend() {
-  if [ -f "$PROJECT_ROOT/app.py" ] && [ -f app/app.py ]; then
-    local newer
-    newer="$(find "$PROJECT_ROOT" -maxdepth 1 -name '*.py' -newer app/app.py 2>/dev/null | head -1 || true)"
-    if [ -n "$newer" ]; then
-      echo "    ⚠ 项目根的 $(basename "$newer") 比 deploy/app 新，建议先执行： ./deploy.sh sync"
-    fi
   fi
 }
 
@@ -283,25 +279,29 @@ disable_tls() {
 }
 
 # ---------- 子命令 ----------
-# 从项目根同步后端源码到 deploy/app（开发者用，服务器上不需要）
-sync_sources() {
-  if [ ! -f "$PROJECT_ROOT/requirements.txt" ]; then
-    echo "找不到项目根（$PROJECT_ROOT）的 requirements.txt，无法同步。" >&2
-    echo "只上传 deploy 目录时不需要同步：deploy/app 已是自带副本。" >&2
+# 准备构建上下文：把项目根的 src/ 与 requirements.txt 同步进 deploy/
+# 这一步取代了旧版的 deploy/app 源码副本，构建前自动执行。
+prepare_context() {
+  if [ -d "$PROJECT_ROOT/src/ansible_ui" ] && [ -f "$PROJECT_ROOT/requirements.txt" ]; then
+    echo "==> 准备构建上下文 ← $PROJECT_ROOT/src"
+    rm -rf src && mkdir -p src
+    cp -r "$PROJECT_ROOT/src/ansible_ui" src/
+    cp "$PROJECT_ROOT/requirements.txt" ./
+    # 前端产物之外的静态资源（robots.txt 等）
+    for f in robots.txt vite.svg favicon.ico; do
+      if [ -f "$PROJECT_ROOT/public/$f" ]; then
+        mkdir -p dist && cp "$PROJECT_ROOT/public/$f" dist/
+      fi
+    done
+    echo "    已同步 $(find src -name '*.py' | wc -l | tr -d ' ') 个 .py"
+  elif [ -d src/ansible_ui ] && [ -f requirements.txt ]; then
+    # 服务器上只有 deploy 目录（离线包场景）：用包里自带的源码
+    echo "==> 使用 deploy/src 自带的源码（未找到项目根，跳过同步）"
+  else
+    echo "!! 找不到后端源码。" >&2
+    echo "   在完整项目里执行： ./deploy.sh sync" >&2
     exit 1
   fi
-  echo "==> 同步后端源码 → deploy/app"
-  rm -rf app && mkdir -p app
-  cp "$PROJECT_ROOT"/*.py app/
-  cp "$PROJECT_ROOT/requirements.txt" ./
-  echo "    已同步 $(ls app | wc -l | tr -d ' ') 个 .py"
-
-  for f in robots.txt vite.svg favicon.ico; do
-    if [ -f "$PROJECT_ROOT/public/$f" ]; then
-      mkdir -p dist && cp "$PROJECT_ROOT/public/$f" dist/
-    fi
-  done
-  echo "==> 完成。提交后服务器上就能直接用： git add deploy/ && git commit"
 }
 
 # 本地构建前端并固化到 deploy/dist（需要 Node.js）
@@ -334,9 +334,9 @@ frontend() {
 export_image() {
   require_docker
   ensure_env
+  prepare_context
   check_inputs
   check_tls_ready
-  warn_stale_backend
 
   local name="${1:-}"
   [ -z "$name" ] && name="ansible-ui-offline-$(date +%Y%m%d).tar.gz"
@@ -444,7 +444,7 @@ usage() {
   echo "  load [包]   在离线机器上载入镜像并启动，不构建、不需要网络"
   echo "              不带参数时读当前目录的 image.tar（已解包的包目录里）"
   echo "  build       仅构建镜像，不启动"
-  echo "  sync        从项目根同步后端源码到 deploy/app（开发机用）"
+  echo "  sync        从项目根同步后端源码到 deploy/src（构建前自动执行）"
   echo "  frontend    本地构建前端并同步到 deploy/dist（需要 Node.js）"
   echo "  down        停止并移除容器（保留数据卷与证书）"
   echo "  restart     重启容器（不重新构建，换证书后用这个）"
@@ -457,10 +457,10 @@ case "${1:-up}" in
   up)
     require_docker
     ensure_env
-    check_inputs
+    prepare_context
+  check_inputs
     check_tls_ready
     check_proxy_risk
-    warn_stale_backend
     docker compose up -d --build
     print_url
     ;;
@@ -499,13 +499,13 @@ case "${1:-up}" in
   build)
     require_docker
     ensure_env
-    check_inputs
+    prepare_context
+  check_inputs
     check_tls_ready
-    warn_stale_backend
     docker compose build
     ;;
   sync)
-    sync_sources
+    prepare_context
     ;;
   frontend)
     frontend

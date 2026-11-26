@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ansible-ui"
+version = "2.0.0"
+description = "Ansible Web 管理面板：主机管理、命令下发、Playbook、Web 终端与文件管理"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dynamic = ["dependencies"]
+
+# 依赖的唯一来源仍是 requirements.txt（Docker 构建也用它），
+# 这里只是引用，避免两处维护漂移。
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# src 布局：包在 src/ansible_ui，安装后可直接 python -m ansible_ui
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",  # 行宽由 line-length 控制，中文注释不强制折行
+    "B008",  # Flask 装饰器里调用函数是常规写法
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/ansible_ui/__init__.py" = ["F401"]  # 导入即注册钩子/错误处理器
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

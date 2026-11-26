@@ -28,8 +28,12 @@ deploy/.env
 *.key
 
 # ---------- Docker 构建产物 ----------
-# deploy/app 与 deploy/dist 是「发布包」的一部分，需要入库，
+# deploy/dist 是「发布包」的一部分，需要入库，
 # 这样部署目录可以单独拷到服务器构建（不需要 node、不需要项目其余部分）。
+# 后端源码只有一份：仓库根的 src/。deploy/src 与 deploy/requirements.txt
+# 由 ./deploy.sh sync 在构建前临时生成，因此不入库。
+deploy/src/
+deploy/requirements.txt
 deploy/__pycache__/
 
 # ---------- TLS 证书 ----------
