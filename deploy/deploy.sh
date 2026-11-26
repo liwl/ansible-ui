@@ -88,13 +88,13 @@ ensure_env() {
 # 构建前确认输入齐全（缺了要给出明确的补救办法，而不是让 docker 报天书）
 check_inputs() {
   if [ ! -d src/ansible_ui ] || [ ! -f src/ansible_ui/__init__.py ]; then
-    echo "!! deploy/src 缺少后端源码。" >&2
-    echo "   在完整项目里执行： ./deploy.sh sync" >&2
+    echo "!! deploy/src 缺少后端源码（应在上一步由 prepare_context 生成）。" >&2
+    echo "   在仓库根的 deploy/ 目录里执行，或先从本地传： rsync -av src requirements.txt root@<本机>:$(pwd)/" >&2
     exit 1
   fi
   if [ ! -f requirements.txt ]; then
     echo "!! deploy 缺少 requirements.txt。" >&2
-    echo "   在完整项目里执行： ./deploy.sh sync" >&2
+    echo "   从项目根复制： cp requirements.txt $(pwd)/" >&2
     exit 1
   fi
   if [ ! -f dist/index.html ]; then
@@ -298,8 +298,25 @@ prepare_context() {
     # 服务器上只有 deploy 目录（离线包场景）：用包里自带的源码
     echo "==> 使用 deploy/src 自带的源码（未找到项目根，跳过同步）"
   else
-    echo "!! 找不到后端源码。" >&2
-    echo "   在完整项目里执行： ./deploy.sh sync" >&2
+    echo "!! 找不到后端源码，无法构建。" >&2
+    echo "" >&2
+    echo "   已查找以下两处，都不存在：" >&2
+    echo "     $PROJECT_ROOT/src/ansible_ui    （项目根，clone 完整仓库时在这）" >&2
+    echo "     $(pwd)/src/ansible_ui           （部署目录自带）" >&2
+    echo "" >&2
+    echo "   原因：后端源码只有一份，放在仓库根的 src/ 下，不随 deploy 目录分发。" >&2
+    echo "   当前目录只有部署文件。三种解法任选其一：" >&2
+    echo "" >&2
+    echo "   1) 服务器上拉完整仓库（推荐）" >&2
+    echo "        git clone <仓库地址> ansible-ui && cd ansible-ui/deploy && ./deploy.sh up" >&2
+    echo "" >&2
+    echo "   2) 从本地把源码传过来（本地项目根执行）" >&2
+    echo "        rsync -av src requirements.txt root@<本机>:$(pwd)/" >&2
+    echo "      传完重新执行 ./deploy.sh up" >&2
+    echo "" >&2
+    echo "   3) 改用离线包（目标机不通网时用这个）" >&2
+    echo "        本地： cd deploy && ./deploy.sh export" >&2
+    echo "        服务器： tar xzf ansible-ui-offline-*.tar.gz && cd 解压目录 && ./deploy.sh load" >&2
     exit 1
   fi
 }

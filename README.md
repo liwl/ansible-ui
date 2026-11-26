@@ -89,6 +89,11 @@ vi .env                # 必须改 ADMIN_PASSWORD
 ./deploy.sh up
 ```
 
+> **不要把 `deploy/` 目录单独拷到服务器再构建。**
+> 后端源码只存在于仓库根的 `src/ansible_ui`，`deploy/` 里没有副本。
+> 服务器上要么 `git clone` 整个仓库后在 `deploy/` 里操作，要么用离线包（`./deploy.sh export`，包里带源码）。
+> 只拷 `deploy/` 会报「找不到后端源码」。
+
 访问 `http://<服务器IP>:5000`，用 `.env` 里的账号登录。
 
 首次启动会用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 初始化主管理员。主管理员不能在界面上删除或降级，凭证以 `.env` 为唯一来源。
